@@ -1143,41 +1143,58 @@ html[data-theme="dark"] .planning-mode-btn.active {
   font-family: 'JetBrains Mono', monospace;
 }
 
-/* 7-Day Interactive Horizon & Date Strip (Clean, Zero Clutter) */
+/* 7-Day Interactive Horizon & Date Strip (Symmetrical, Warm Brass Active State) */
 .horizon-week-strip {
   flex: 0 0 auto;
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 6px;
+  padding: 2px 0;
+  margin: -2px 0;
 }
 
-@media (max-width: 960px) {
+@media (max-width: 1023px) and (min-width: 680px) {
+  .horizon-week-strip {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 679px) {
   .horizon-week-strip {
     display: flex;
     overflow-x: auto;
     scrollbar-width: none;
-    padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    gap: 6px;
+    padding: 2px 0;
+    margin: -2px 0;
   }
   .horizon-week-strip::-webkit-scrollbar {
     display: none;
   }
   .horizon-day-card,
   .horizon-day-cell {
-    flex: 0 0 116px;
+    flex: 0 0 calc((100% - 12px) / 3);
+    scroll-snap-align: start;
   }
 }
 
 .horizon-day-card,
 .horizon-day-cell {
-  padding: 7px 10px;
-  border-radius: 9px;
+  min-height: 48px;
+  padding: 8px 10px;
+  border-radius: 10px;
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
+  box-shadow: 0 1px 2px rgba(11, 23, 48, 0.03);
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: border-color 0.14s ease, background-color 0.14s ease, box-shadow 0.14s ease;
   min-width: 0;
   text-align: left;
 }
@@ -1188,18 +1205,35 @@ html[data-theme="dark"] .planning-mode-btn.active {
   box-shadow: var(--shadow-xs);
 }
 
+.horizon-day-cell.is-today-cell:not(.active) {
+  border-color: rgba(166, 113, 24, 0.24);
+}
+
+html[data-theme="dark"] .horizon-day-cell.is-today-cell:not(.active) {
+  border-color: rgba(217, 165, 74, 0.26);
+}
+
 .horizon-day-card.is-selected,
 .horizon-day-cell.active {
-  border-color: var(--text-primary);
-  background: var(--bg-card);
-  box-shadow: 0 0 0 1px var(--text-primary), var(--shadow-xs);
+  border-color: rgba(166, 113, 24, 0.58);
+  background-color: rgba(166, 113, 24, 0.08);
+  box-shadow: inset 0 0 0 0.5px rgba(166, 113, 24, 0.28), 0 1px 3px rgba(166, 113, 24, 0.08);
 }
 
 html[data-theme="dark"] .horizon-day-card.is-selected,
 html[data-theme="dark"] .horizon-day-cell.active {
   border-color: var(--brass);
-  background: var(--brass-soft);
-  box-shadow: 0 0 0 1px var(--brass);
+  background-color: rgba(217, 165, 74, 0.13);
+  box-shadow: inset 0 0 0 0.5px rgba(217, 165, 74, 0.32), 0 2px 6px rgba(0, 0, 0, 0.24);
+}
+
+.horizon-day-copy {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1.5px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .h-day-top,
@@ -1212,27 +1246,25 @@ html[data-theme="dark"] .horizon-day-cell.active {
 
 .h-day-name,
 .horizon-day-name {
-  font-size: 10.5px;
+  font-size: 10px;
+  line-height: 1.2;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.045em;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.horizon-day-cell.active .horizon-day-name,
-.horizon-day-cell.is-today-cell .horizon-day-name {
-  color: var(--text-primary);
-}
-
-html[data-theme="dark"] .horizon-day-cell.active .horizon-day-name {
+.horizon-day-cell.is-today-cell .horizon-day-name,
+.horizon-day-cell.active .horizon-day-name {
   color: var(--brass-bright);
 }
 
 .horizon-day-meta {
-  font-size: 12px;
+  font-size: 12.5px;
+  line-height: 1.22;
   font-weight: 600;
   color: var(--text-primary);
   white-space: nowrap;
@@ -1240,22 +1272,52 @@ html[data-theme="dark"] .horizon-day-cell.active .horizon-day-name {
   text-overflow: ellipsis;
 }
 
+.horizon-day-cell.active .horizon-day-meta {
+  font-weight: 700;
+}
+
 .h-day-badge,
 .horizon-day-count {
-  padding: 0.5px 6px;
+  flex: 0 0 auto;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
   border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 700;
-  background: var(--bg-ink);
+  line-height: 1;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
+}
+
+.horizon-day-count.is-zero {
+  opacity: 0.56;
 }
 
 .h-day-badge.has-items,
 .horizon-day-count.has-items {
   background: var(--brass-soft);
   color: var(--brass-bright);
-  border: 1px solid var(--border-strong);
+  border-color: var(--border-strong);
+  opacity: 1;
+}
+
+.horizon-day-cell.active .horizon-day-count {
+  background: var(--brass);
+  border-color: var(--brass);
+  color: #FFFFFF;
+  opacity: 1;
+}
+
+html[data-theme="dark"] .horizon-day-cell.active .horizon-day-count {
+  background: var(--brass);
+  border-color: var(--brass);
+  color: #081121;
 }
 
 .active-date-context-bar {
@@ -1263,13 +1325,131 @@ html[data-theme="dark"] .horizon-day-cell.active .horizon-day-name {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 7px 12px;
-  border-radius: 9px;
+  padding: 7px 10px;
+  border-radius: 10px;
   background: var(--bg-card);
   border: 1px solid var(--border-strong);
+  box-shadow: 0 1px 2px rgba(11, 23, 48, 0.03);
   font-size: 12px;
   color: var(--text-secondary);
-  flex-wrap: wrap;
+}
+
+.active-date-bar-info {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.active-date-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--brass);
+  flex-shrink: 0;
+}
+
+.active-date-bar-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+  font-size: 12.5px;
+}
+
+.active-date-bar-count {
+  display: inline-flex;
+  align-items: center;
+  padding: 1.5px 6.5px;
+  border-radius: 999px;
+  background: var(--brass-glow);
+  color: var(--brass-bright);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.active-date-bar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.active-date-btn {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 7.5px;
+  font-size: 11.5px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  white-space: nowrap;
+  transition: border-color 0.12s ease, background-color 0.12s ease, color 0.12s ease;
+}
+
+.active-date-btn.primary {
+  background: var(--brass-glow);
+  border: 1px solid var(--border-strong);
+  color: var(--brass-bright);
+}
+
+.active-date-btn.primary:hover {
+  background: var(--brass);
+  border-color: var(--brass);
+  color: #FFFFFF;
+}
+
+html[data-theme="dark"] .active-date-btn.primary:hover {
+  color: #081121;
+}
+
+.active-date-btn.ghost {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.active-date-btn.ghost:hover {
+  border-color: var(--brass);
+  color: var(--text-primary);
+}
+
+@media (max-width: 380px) {
+  .horizon-day-card,
+  .horizon-day-cell {
+    padding: 7px 8px;
+    gap: 4px;
+  }
+  .h-day-name,
+  .horizon-day-name {
+    font-size: 9.5px;
+    letter-spacing: 0.03em;
+  }
+}
+
+@media (max-width: 374px) {
+  .active-date-context-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 7px;
+  }
+  .active-date-bar-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .active-date-btn {
+    height: 32px;
+    width: 100%;
+  }
 }
 
 /* ============================================================================
@@ -3627,7 +3807,7 @@ select.del-composer-select {
   min-height: 35px;
   border-radius: 8px;
   background: var(--bg-subtle);
-  border: 1px solid var(--border-subtle);
+  border: 1.5px solid var(--border-subtle);
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
@@ -3636,7 +3816,7 @@ select.del-composer-select {
   justify-content: center;
   text-align: center;
   white-space: nowrap;
-  transition: all 0.12s ease;
+  transition: border-color 0.12s ease, background-color 0.12s ease, color 0.12s ease;
 }
 
 .np-pill-btn:hover {
@@ -3645,9 +3825,9 @@ select.del-composer-select {
 }
 
 .np-pill-btn.active {
-  background: var(--text-primary);
-  border-color: var(--text-primary);
-  color: #FFFFFF;
+  background: var(--brass-glow);
+  border-color: var(--brass);
+  color: var(--brass-bright);
   font-weight: 700;
 }
 

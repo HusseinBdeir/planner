@@ -2906,8 +2906,8 @@
             const isPrayer = Boolean(payload.openPrayer || payload.tab === 'prayers');
             reg.showNotification(payload.title || 'Planner', {
               body: payload.body || '',
-              icon: './icon-192.png?v=27',
-              badge: './icon-192.png?v=27',
+              icon: './icon-192.png?v=28',
+              badge: './icon-192.png?v=28',
               tag: payload.tag || 'theo-cmd-notif',
               renotify: false,
               requireInteraction: Boolean(payload.requireInteraction),
@@ -4683,34 +4683,57 @@
             : dObj.toLocaleDateString('en-US', { weekday: 'short' });
       const dateShort = dObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       const dayCount = activeItems.filter((r) => matchesPlanDateFilter(r, iso, now)).length;
+      const isSelected = selDate === iso;
 
       dayCells.push(`
-        <button type="button" class="horizon-day-cell ${selDate === iso ? 'active' : ''} ${i === 0 ? 'is-today-cell' : ''}" data-plan-date="${iso}" title="Plan or view items for ${esc(dayName)} (${esc(dateShort)})">
-          <div class="horizon-day-top">
+        <button type="button" class="horizon-day-cell ${isSelected ? 'active' : ''} ${i === 0 ? 'is-today-cell' : ''}" data-plan-date="${iso}" role="tab" aria-selected="${isSelected ? 'true' : 'false'}">
+          <span class="horizon-day-copy">
             <span class="horizon-day-name">${esc(dayName)}</span>
-            ${
-              dayCount > 0
-                ? `<span class="horizon-day-count has-items tabular">${dayCount}</span>`
-                : `<span class="horizon-day-count tabular" style="opacity:0.42">0</span>`
-            }
-          </div>
-          <div class="horizon-day-meta">${esc(dateShort)}</div>
+            <span class="horizon-day-meta">${esc(dateShort)}</span>
+          </span>
+          <span class="horizon-day-count ${dayCount > 0 ? 'has-items' : 'is-zero'} tabular">${dayCount}</span>
         </button>
       `);
     }
 
+    const isAllSelected = selDate === 'all';
     return `
-      <div class="horizon-week-strip">
-        <button type="button" class="horizon-day-cell ${selDate === 'all' ? 'active' : ''}" data-plan-date="all" title="Show all active plans across every date">
-          <div class="horizon-day-top">
+      <div class="horizon-week-strip" role="tablist" aria-label="Plan Dates">
+        <button type="button" class="horizon-day-cell ${isAllSelected ? 'active' : ''}" data-plan-date="all" role="tab" aria-selected="${isAllSelected ? 'true' : 'false'}">
+          <span class="horizon-day-copy">
             <span class="horizon-day-name">All Plans</span>
-            <span class="horizon-day-count ${activeItems.length > 0 ? 'has-items' : ''} tabular">${activeItems.length}</span>
-          </div>
-          <div class="horizon-day-meta">All active dates</div>
+            <span class="horizon-day-meta">All Dates</span>
+          </span>
+          <span class="horizon-day-count ${activeItems.length > 0 ? 'has-items' : 'is-zero'} tabular">${activeItems.length}</span>
         </button>
         ${dayCells.join('')}
       </div>
     `;
+  }
+
+  function syncHorizonStripScroll(root, prevScrollLeft = 0) {
+    if (!root) return;
+    const strip = root.querySelector('.horizon-week-strip');
+    if (!strip) {
+      state.scrollSelectedDateIntoView = false;
+      return;
+    }
+    if (prevScrollLeft > 0) {
+      strip.scrollLeft = prevScrollLeft;
+    }
+    if (state.scrollSelectedDateIntoView) {
+      state.scrollSelectedDateIntoView = false;
+      const activeCell = strip.querySelector('.horizon-day-cell.active');
+      if (activeCell && strip.scrollWidth > strip.clientWidth + 2) {
+        const stripRect = strip.getBoundingClientRect();
+        const cellRect = activeCell.getBoundingClientRect();
+        if (cellRect.left < stripRect.left) {
+          strip.scrollLeft = Math.max(0, strip.scrollLeft - (stripRect.left - cellRect.left));
+        } else if (cellRect.right > stripRect.right) {
+          strip.scrollLeft += cellRect.right - stripRect.right;
+        }
+      }
+    }
   }
 
   function isRecentlyCompleted(r, now = Date.now()) {
@@ -4771,6 +4794,8 @@
   function renderPlanningView() {
     const root = document.getElementById('view-planning');
     if (!root) return;
+    const prevStripScrollLeft = root.querySelector('.horizon-week-strip')?.scrollLeft || 0;
+    try {
     const now = Date.now();
     const allActive = state.reminders.filter((r) => !r.completed && !r.deleted);
     const completed = state.reminders
@@ -4835,12 +4860,20 @@
       selDate !== 'all'
         ? `
       <div class="active-date-context-bar">
-        <span>Planning for <strong>${esc(formatIsoFriendly(selDate, true))}</strong> · ${active.length} planned</span>
-        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-          <button type="button" class="bento-inline-btn" data-open-new-plan-date="${esc(selDate)}">
-            + Add Plan for ${esc(formatIsoFriendly(selDate, false))}
+        <div class="active-date-bar-info">
+          <span class="active-date-dot" aria-hidden="true"></span>
+          <span class="active-date-bar-text">
+            <strong>${esc(formatIsoFriendly(selDate, true))}</strong>
+            <span class="active-date-bar-count tabular">${active.length} ${active.length === 1 ? 'plan' : 'plans'}</span>
+          </span>
+        </div>
+        <div class="active-date-bar-actions">
+          <button type="button" class="active-date-btn primary" data-open-new-plan-date="${esc(selDate)}">
+            + Add Plan
           </button>
-          <button type="button" class="mini-chip" data-plan-date="all">Show All Dates ✕</button>
+          <button type="button" class="active-date-btn ghost" data-plan-date="all">
+            <span>All Dates</span><span aria-hidden="true">✕</span>
+          </button>
         </div>
       </div>
     `
@@ -5305,6 +5338,9 @@
       </div>
       ${buildCompletedArchiveSectionHtml(completed, now)}
     `;
+    } finally {
+      syncHorizonStripScroll(root, prevStripScrollLeft);
+    }
   }
 
   /* ============================================================================
@@ -8813,6 +8849,7 @@
         const dIso = planDateCell.getAttribute('data-plan-date') || 'all';
         const nextDate = state.selectedPlanDate === dIso && dIso !== 'all' ? '' : dIso === 'all' ? '' : dIso;
         state.selectedPlanDate = nextDate;
+        state.scrollSelectedDateIntoView = true;
         renderLiveAdvisorDrawer();
         renderPlanningView();
         return;
@@ -9970,7 +10007,7 @@
         }
       });
       navigator.serviceWorker
-        .register('./sw.js?v=27', { updateViaCache: 'none' })
+        .register('./sw.js?v=28', { updateViaCache: 'none' })
         .then(async (reg) => {
           reg.update().catch(() => {});
           if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
