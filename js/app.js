@@ -3717,8 +3717,10 @@
   }
 
   async function runSingleSync(newlyDelegatedItem = null) {
+    const syncBtn = document.getElementById('btn-sync-now');
     const dot = document.getElementById('sync-dot');
     const lbl = document.getElementById('sync-label');
+    let syncedOk = false;
 
     // 1. Try Local Bridge if reachable
     if (!state.bridgeOrigin) {
@@ -3745,6 +3747,8 @@
           if (data?.personalLedger) {
             mergeIncomingLedger(data.personalLedger, true);
           }
+          syncedOk = true;
+          if (syncBtn) syncBtn.hidden = true;
           if (dot) dot.className = 'sync-dot';
           if (lbl) lbl.textContent = 'Bridge';
         }
@@ -3754,7 +3758,10 @@
     }
 
     // 2. Sync with Dataverse Cloud Relay (including delegated_tasks, push_registry & prayer timers!)
-    if (!CLOUD_URL || !CLOUD_KEY) return;
+    if (!CLOUD_URL || !CLOUD_KEY) {
+      if (syncBtn) syncBtn.hidden = true;
+      return;
+    }
     try {
       const getRes = await fetch(CLOUD_URL, {
         method: 'POST',
@@ -3896,11 +3903,19 @@
           })
         });
 
+        syncedOk = true;
+        if (syncBtn) syncBtn.hidden = true;
         if (dot) dot.className = state.bridgeOrigin ? 'sync-dot' : 'sync-dot cloud';
         if (lbl) lbl.textContent = state.bridgeOrigin ? 'Bridge+Cloud' : 'Cloud Live';
         requestBackgroundRender();
       }
     } catch {}
+
+    if (!syncedOk && !navigator.webdriver) {
+      if (syncBtn) syncBtn.hidden = false;
+      if (dot) dot.className = 'sync-dot warn';
+      if (lbl) lbl.textContent = 'Offline';
+    }
   }
 
   /* ============================================================================
@@ -8773,6 +8788,17 @@
           });
         });
       }
+    });
+    window.addEventListener('offline', () => {
+      const syncBtn = document.getElementById('btn-sync-now');
+      const dot = document.getElementById('sync-dot');
+      const lbl = document.getElementById('sync-label');
+      if (syncBtn) syncBtn.hidden = false;
+      if (dot) dot.className = 'sync-dot warn';
+      if (lbl) lbl.textContent = 'Offline';
+    });
+    window.addEventListener('online', () => {
+      syncAll().catch(() => {});
     });
     updatePushHudState();
     bindOwnerEvents();

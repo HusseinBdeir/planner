@@ -433,6 +433,11 @@ button {
   box-shadow: 0 0 6px var(--brass-gold);
 }
 
+.sync-dot.warn {
+  background: var(--amber);
+  box-shadow: 0 0 6px var(--amber);
+}
+
 .hud-icon-btn {
   position: relative;
   width: 30px;
@@ -522,10 +527,7 @@ button {
     gap: 4px;
   }
   .hud-sync-pill {
-    padding: 4px 6px;
-  }
-  #sync-label {
-    display: none;
+    padding: 4px 7px;
   }
 }
 

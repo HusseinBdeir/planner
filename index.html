@@ -9,13 +9,13 @@
   <meta name="apple-mobile-web-app-title" content="Planner">
   <meta name="description" content="Planner — Executive Planning, Horizon Agenda, BHFIRMS Delegation &amp; Accountability, Daily 100% Score &amp; Shia Prayer Times.">
   <title>Planner — Executive Planning, Delegation, Tasks, Score &amp; Prayer Times</title>
-  <link rel="manifest" href="manifest.json?v=22">
-  <link rel="icon" type="image/svg+xml" href="icon.svg?v=22">
-  <link rel="apple-touch-icon" href="icon-180.png?v=22">
+  <link rel="manifest" href="manifest.json?v=23">
+  <link rel="icon" type="image/svg+xml" href="icon.svg?v=23">
+  <link rel="apple-touch-icon" href="icon-180.png?v=23">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/command.css?v=22">
+  <link rel="stylesheet" href="css/command.css?v=23">
   <script id="pre">
     (() => {
       try {
@@ -91,9 +91,9 @@
           <strong class="prayer-hud-time tabular" id="prayer-hud-time">--:--</strong>
           <span class="prayer-hud-cd tabular" id="prayer-hud-cd"></span>
         </button>
-        <button type="button" class="hud-sync-pill" id="btn-sync-now" title="Sync with Cloud Relay &amp; Workstation Bridge">
-          <span class="sync-dot" id="sync-dot"></span>
-          <span id="sync-label">Sync</span>
+        <button type="button" class="hud-sync-pill" id="btn-sync-now" hidden title="Offline — tap to retry Cloud Relay sync">
+          <span class="sync-dot warn" id="sync-dot"></span>
+          <span id="sync-label">Offline</span>
         </button>
         <button type="button" class="hud-icon-btn" id="btn-theme-toggle" title="Toggle Dark / Light Theme" aria-label="Toggle Theme">
           <svg viewBox="0 0 20 20"><path d="M10 3a7 7 0 1 0 7 7c0-.4-.04-.8-.1-1.2A5.5 5.5 0 0 1 11.2 3.1C10.8 3.04 10.4 3 10 3z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
@@ -220,7 +220,7 @@
   <!-- Toast Stack -->
   <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
 
-  <script src="js/endpoints.js?v=22"></script>
-  <script src="js/app.js?v=22"></script>
+  <script src="js/endpoints.js?v=23"></script>
+  <script src="js/app.js?v=23"></script>
 </body>
 </html>
