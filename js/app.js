@@ -2906,8 +2906,8 @@
             const isPrayer = Boolean(payload.openPrayer || payload.tab === 'prayers');
             reg.showNotification(payload.title || 'Planner', {
               body: payload.body || '',
-              icon: './icon-192.png?v=26',
-              badge: './icon-192.png?v=26',
+              icon: './icon-192.png?v=27',
+              badge: './icon-192.png?v=27',
               tag: payload.tag || 'theo-cmd-notif',
               renotify: false,
               requireInteraction: Boolean(payload.requireInteraction),
@@ -4298,10 +4298,16 @@
     const selIso =
       state.selectedPlanDate && state.selectedPlanDate !== 'all' ? state.selectedPlanDate : '';
 
+    const isPhoneSelect = typeof window !== 'undefined' && window.innerWidth <= 743;
+
     if (clusterAutoOpt) {
       clusterAutoOpt.textContent = text
-        ? `Auto · ${detectedCluster.shortLabel}`
-        : 'Category: Auto';
+        ? isPhoneSelect
+          ? detectedCluster.shortLabel
+          : `Auto · ${detectedCluster.shortLabel}`
+        : isPhoneSelect
+          ? 'Category'
+          : 'Category: Auto';
     }
     if (clusterSel && document.activeElement !== clusterSel) {
       clusterSel.value = state.draft.clusterOverride || '';
@@ -4310,11 +4316,12 @@
 
     if (whenAutoOpt) {
       if (selIso) {
-        whenAutoOpt.textContent = `When: ${formatIsoFriendly(selIso, false)}`;
+        const friendly = formatIsoFriendly(selIso, false);
+        whenAutoOpt.textContent = isPhoneSelect ? friendly : `When: ${friendly}`;
       } else if (effectiveCluster.id === 'ideas' || effectiveCluster.id === 'want_to_do') {
-        whenAutoOpt.textContent = 'When: Someday';
+        whenAutoOpt.textContent = isPhoneSelect ? 'Someday' : 'When: Someday';
       } else {
-        whenAutoOpt.textContent = 'When: Today';
+        whenAutoOpt.textContent = isPhoneSelect ? 'Today' : 'When: Today';
       }
     }
     if (whenSel && document.activeElement !== whenSel) {
@@ -4549,6 +4556,28 @@
       `
       : '';
 
+    const pillsInnerHtml = [
+      completedTimeBadge,
+      priBadge,
+      stepsBadge,
+      buBadge,
+      delBadge,
+      item.amount > 0 ? `<span class="t-pill amt">$${fmtInt(item.amount)}</span>` : '',
+      !item.completed && targetAt > 0 && (targetAt > now || isMatured || isOverdue)
+        ? `<span class="t-pill ${
+            isMatured || item.delegationStatus === 'done'
+              ? 'matured'
+              : isOverdue
+                ? 'p1'
+                : 'timer'
+          } tabular">${isMatured ? 'Ready' : isOverdue ? 'Due' : esc(countdown)}</span>`
+        : !item.completed && item.planDate
+          ? `<span class="t-pill tabular">${esc(formatIsoFriendly(item.planDate, false))}</span>`
+          : ''
+    ]
+      .filter(Boolean)
+      .join('');
+
     return `
       <div class="${rowCls}" data-row-id="${esc(item.id)}">
         <div class="ticker-main-line" data-row-toggle="${esc(item.id)}">
@@ -4560,27 +4589,7 @@
             title="${esc(doneVerb)}"
           >✓</button>
           <span class="ticker-title">${esc(item.title)}</span>
-          <div class="ticker-pills">
-            ${completedTimeBadge}
-            ${priBadge}
-            ${stepsBadge}
-            ${buBadge}
-            ${delBadge}
-            ${item.amount > 0 ? `<span class="t-pill amt">$${fmtInt(item.amount)}</span>` : ''}
-            ${
-              !item.completed && targetAt > 0 && (targetAt > now || isMatured || isOverdue)
-                ? `<span class="t-pill ${
-                    isMatured || item.delegationStatus === 'done'
-                      ? 'matured'
-                      : isOverdue
-                        ? 'p1'
-                        : 'timer'
-                  } tabular">${isMatured ? 'Ready' : isOverdue ? 'Due' : esc(countdown)}</span>`
-                : !item.completed && item.planDate
-                  ? `<span class="t-pill tabular">${esc(formatIsoFriendly(item.planDate, false))}</span>`
-                  : ''
-            }
-          </div>
+          <div class="ticker-pills">${pillsInnerHtml}</div>
         </div>
 
         ${
@@ -5150,7 +5159,11 @@
       const items = getClusterDisplayItems(c.id);
       const activeCount = items.filter((r) => !r.completed).length;
       const isComposerOpen = state.activeInlineClusterId === c.id;
-      const tileCls = ['bento-tile', items.length === 0 ? 'is-empty-mobile' : '']
+      const tileCls = [
+        'bento-tile',
+        items.length === 0 ? 'is-empty-mobile' : '',
+        isComposerOpen ? 'has-open-composer' : ''
+      ]
         .filter(Boolean)
         .join(' ');
 
@@ -5573,27 +5586,60 @@
 
     const selectedStudioPerson = state.studioAssigneeName || state.draft.assigneeName || (rosterPeople[0]?.name || '');
     const selectedStudioBu = state.studioAssigneeBu || state.draft.assigneeBu || (rosterPeople[0]?.bu || '');
+    const isDesktopStudio = typeof window !== 'undefined' && window.innerWidth >= 1040;
+    const isPhoneStudio = typeof window !== 'undefined' && window.innerWidth <= 680;
+    const showStudioExtras = !isPhoneStudio || Boolean(state.delStudioMoreOpen);
+
+    const buSelectHtml = `
+      <select id="del-studio-bu" class="del-composer-select">
+        <option value="">Unit (Auto)</option>
+        ${BHFIRMS_BUS.map(
+          (b) => `<option value="${b.id}" ${selectedStudioBu === b.id ? 'selected' : ''}>${esc(b.short)}</option>`
+        ).join('')}
+      </select>
+    `;
+    const priSelectHtml = `
+      <select id="del-studio-priority" class="del-composer-select">
+        <option value="p2">P2 · High</option>
+        <option value="p1">P1 · Critical</option>
+        <option value="p3">P3 · Normal</option>
+      </select>
+    `;
+    const waitSelectHtml = `
+      <select id="del-studio-wait" class="del-composer-select">
+        <option value="today">Today 18:00</option>
+        <option value="1d">+24h SLA</option>
+        <option value="tonight">Tonight 20:30</option>
+        <option value="2d">+48h SLA</option>
+        <option value="7d">In 7 Days</option>
+        <option value="park">No Timer</option>
+      </select>
+    `;
 
     // Fast Delegation Composer Deck
     const composerDeckHtml = `
       <div class="del-command-deck">
         <div class="del-deck-top">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-            <span class="del-deck-title">Executive Delegation Studio</span>
-            <span style="font-size:11px;color:var(--text-muted)">Assign a task with deliverable checkpoints &amp; dispatch a live status link via WhatsApp</span>
+            <span class="del-deck-title">Delegation Studio</span>
+            ${
+              !isPhoneStudio
+                ? `<span style="font-size:11px;color:var(--text-muted)">Assign a task &amp; dispatch a live status link via WhatsApp</span>`
+                : ''
+            }
           </div>
           <div style="display:flex;align-items:center;gap:6px">
             <button type="button" class="mini-chip" id="btn-manage-roster">
-              👥 Team Roster (${state.teamRoster.length})
+              👥 Roster (${state.teamRoster.length})
             </button>
             <button type="button" class="mini-chip" id="btn-quick-add-person">
-              + Add Person
+              + Person
             </button>
           </div>
         </div>
 
         <div class="horiz-pill-strip" style="padding-bottom:2px">
-          <span style="font-size:11px;font-weight:700;color:var(--text-secondary);flex-shrink:0">Assign to:</span>
+          <span style="font-size:11px;font-weight:700;color:var(--text-secondary);flex-shrink:0">To:</span>
           ${
             rosterPeople.length > 0
               ? rosterPeople
@@ -5612,62 +5658,61 @@
                     `;
                   })
                   .join('')
-              : `<span style="font-size:11px;color:var(--text-muted)">Type a person's name below (they will be saved to your Team Roster automatically)</span>`
+              : `<span style="font-size:11px;color:var(--text-muted)">Type a staff name below</span>`
           }
         </div>
 
-        <form id="del-studio-form" style="display:flex;flex-direction:column;gap:6px" autocomplete="off">
-          <div class="del-composer-row">
+        <form id="del-studio-form" style="display:flex;flex-direction:column;gap:7px" autocomplete="off">
+          <div class="del-studio-main-grid">
             <input
               type="text"
               id="del-studio-person"
               class="del-composer-input"
-              style="flex:0 0 155px"
               value="${esc(selectedStudioPerson)}"
-              placeholder="Assignee (e.g. Ali)"
+              placeholder="Assignee"
               required
             >
             <input
               type="text"
               id="del-studio-title"
               class="del-composer-input"
-              placeholder="What needs to be delivered? (e.g. Inspect filter press pressure & send photo)"
+              placeholder="What needs to be delivered?"
               required
             >
-            <select id="del-studio-bu" class="del-composer-select">
-              <option value="">Unit (Auto)</option>
-              ${BHFIRMS_BUS.map(
-                (b) => `<option value="${b.id}" ${selectedStudioBu === b.id ? 'selected' : ''}>${esc(b.short)}</option>`
-              ).join('')}
-            </select>
-            <select id="del-studio-priority" class="del-composer-select">
-              <option value="p2">P2 · High</option>
-              <option value="p1">P1 · Critical</option>
-              <option value="p3">P3 · Normal</option>
-            </select>
-            <select id="del-studio-wait" class="del-composer-select">
-              <option value="today">Today 18:00</option>
-              <option value="1d">+24h SLA</option>
-              <option value="tonight">Tonight 20:30</option>
-              <option value="2d">+48h SLA</option>
-              <option value="7d">In 7 Days</option>
-              <option value="park">No Timer</option>
-            </select>
+            ${isDesktopStudio ? `${buSelectHtml}${priSelectHtml}${waitSelectHtml}` : ''}
           </div>
 
-          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          ${
+            isPhoneStudio
+              ? `
+            <button type="button" class="np-more-toggle" data-toggle-del-studio-more="1" style="padding:6px 10px">
+              <span>${showStudioExtras ? '▾ Hide SLA, Unit & Steps' : '+ SLA, Priority & Steps (Today 18:00 · P2)'}</span>
+              <span style="font-size:11px;color:var(--text-muted)">${showStudioExtras ? 'Less' : 'Customize'}</span>
+            </button>
+          `
+              : ''
+          }
+
+          <div style="display:${showStudioExtras ? 'flex' : 'none'};flex-direction:column;gap:6px">
+            ${
+              !isDesktopStudio
+                ? `<div class="del-studio-meta-grid">${buSelectHtml}${priSelectHtml}${waitSelectHtml}</div>`
+                : ''
+            }
             <input
               type="text"
               id="del-studio-steps"
               class="del-composer-input"
-              style="font-size:11.5px;padding:6px 10px"
-              placeholder="Deliverable steps or instructions (optional, separate steps with | e.g. Check invoice | Confirm bank transfer | Upload receipt)"
+              placeholder="Checklist steps (optional, separate with | e.g. Check invoice | Confirm payment)"
             >
-            <button type="submit" class="t-act-btn primary" data-studio-submit="assign" style="padding:7px 12px;flex-shrink:0">
+          </div>
+
+          <div class="del-studio-btn-row">
+            <button type="submit" class="t-act-btn primary" data-studio-submit="assign" style="padding:7.5px 12px;display:inline-flex;align-items:center;gap:5px">
               ✓ Assign &amp; Track
             </button>
-            <button type="submit" class="t-act-btn wa" data-studio-submit="whatsapp" style="padding:7px 12px;flex-shrink:0">
-              📲 Assign &amp; WhatsApp
+            <button type="submit" class="t-act-btn wa" data-studio-submit="whatsapp" style="padding:7.5px 12px;display:inline-flex;align-items:center;gap:5px">
+              📲 ${isPhoneStudio ? 'WhatsApp' : 'Assign & WhatsApp'}
             </button>
           </div>
         </form>
@@ -5763,7 +5808,7 @@
       const colsHtml = stages
         .map(
           (st) => `
-        <div class="del-stage-col">
+        <div class="del-stage-col ${st.items.length === 0 ? 'is-empty-stage' : ''}">
           <div class="del-stage-head">
             <div>
               <div class="del-stage-title">${esc(st.title)}</div>
@@ -5991,9 +6036,9 @@
 
       <div class="score-two-col">
         <div class="habit-col-box">
-          <div style="display:flex;justify-content:space-between;align-items:center;font-size:12.5px;font-weight:800;color:var(--emerald)">
-            <span>✅ 5 Daily Do's (+10% Full · +5% Half)</span>
-            <span class="tabular">+${sc.doEarned}% / 50%</span>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:12.5px;font-weight:800;color:var(--emerald)">
+            <span>✅ 5 Daily Do's (+10% · +5%)</span>
+            <span class="tabular" style="flex-shrink:0">+${sc.doEarned}% / 50%</span>
           </div>
           ${DAILY_DOS.map((d) => {
             const val = rec.dos?.[d.id] || 'none';
@@ -6014,9 +6059,9 @@
         </div>
 
         <div class="habit-col-box">
-          <div style="display:flex;justify-content:space-between;align-items:center;font-size:12.5px;font-weight:800;color:var(--crimson)">
-            <span>🛡️ 5 Daily Don'ts (Start 50% · -5% · -10%)</span>
-            <span class="tabular">${sc.dontKept}% / 50% Kept</span>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:12.5px;font-weight:800;color:var(--crimson)">
+            <span>🛡️ 5 Daily Don'ts (Keep 50%)</span>
+            <span class="tabular" style="flex-shrink:0">${sc.dontKept}% / 50%</span>
           </div>
           ${DAILY_DONTS.map((dn) => {
             const val = rec.donts?.[dn.id] || 'intact';
@@ -6027,7 +6072,7 @@
                   <div style="font-size:10.5px;color:var(--text-muted)">${esc(dn.sub)}</div>
                 </div>
                 <div class="habit-seg-btns">
-                  <button type="button" class="h-seg-btn ${val === 'intact' ? 'active-emerald' : ''}" data-set-habit="dont:${dn.id}:intact">10% Kept</button>
+                  <button type="button" class="h-seg-btn ${val === 'intact' ? 'active-emerald' : ''}" data-set-habit="dont:${dn.id}:intact">Kept</button>
                   <button type="button" class="h-seg-btn ${val === 'half' ? 'active-amber' : ''}" data-set-habit="dont:${dn.id}:half">-5%</button>
                   <button type="button" class="h-seg-btn ${val === 'slip' ? 'active-crimson' : ''}" data-set-habit="dont:${dn.id}:slip">-10%</button>
                 </div>
@@ -6130,7 +6175,13 @@
               🕌 Next Shia Prayer · ${esc(today.locationName)}
             </div>
             <div style="font-size:20px;font-weight:800;margin-top:2px">
-              ${nxt ? `${nxt.icon} ${esc(nxt.label)} — ${esc(nxt.arabic)} at <span class="tabular" style="color:var(--emerald)">${esc(nxt.time24)}</span>` : 'Calculating…'}
+              ${
+                nxt
+                  ? `${nxt.icon} ${esc(nxt.label)} — ${esc(nxt.arabic)} at <span class="tabular" style="color:var(--emerald)">${esc(nxt.time24)}</span>${
+                      nxt.isTomorrow ? ` <span style="font-size:12px;font-weight:600;color:var(--text-secondary)">(Tomorrow)</span>` : ''
+                    }`
+                  : 'Calculating…'
+              }
             </div>
             <div style="font-size:12px;color:var(--text-secondary);margin-top:2px">
               ⏳ Countdown: <strong class="tabular" style="color:var(--text-primary)">in ${esc(cd)}</strong>
@@ -6190,11 +6241,11 @@
         </div>
 
         <form id="prayer-custom-loc-form" class="prayer-loc-form-grid">
-          <input type="text" id="prayer-loc-label" value="${esc(cfg.locationName)}" placeholder="City / Label" style="min-width:0;padding:6px 8px;border-radius:7px;background:var(--bg-ink);border:1px solid var(--border-subtle);font-size:12px">
-          <input type="number" step="0.0001" id="prayer-loc-lat" value="${cfg.lat}" placeholder="Lat" required style="min-width:0;padding:6px 8px;border-radius:7px;background:var(--bg-ink);border:1px solid var(--border-subtle);font-size:12px">
-          <input type="number" step="0.0001" id="prayer-loc-lng" value="${cfg.lng}" placeholder="Lng" required style="min-width:0;padding:6px 8px;border-radius:7px;background:var(--bg-ink);border:1px solid var(--border-subtle);font-size:12px">
-          <input type="text" id="prayer-loc-tz" value="${esc(cfg.timeZone)}" placeholder="Timezone (e.g. Asia/Beirut)" required style="min-width:0;padding:6px 8px;border-radius:7px;background:var(--bg-ink);border:1px solid var(--border-subtle);font-size:12px">
-          <button type="submit" class="capture-submit-btn" style="padding:6px 10px;font-size:11.5px">Save</button>
+          <input type="text" id="prayer-loc-label" class="np-input" value="${esc(cfg.locationName)}" placeholder="City / Label">
+          <input type="number" step="0.0001" id="prayer-loc-lat" class="np-input" value="${cfg.lat}" placeholder="Lat" required>
+          <input type="number" step="0.0001" id="prayer-loc-lng" class="np-input" value="${cfg.lng}" placeholder="Lng" required>
+          <input type="text" id="prayer-loc-tz" class="np-input" value="${esc(cfg.timeZone)}" placeholder="Timezone (e.g. Asia/Beirut)" required>
+          <button type="submit" class="capture-submit-btn">Save</button>
         </form>
 
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding-top:4px;border-top:1px solid var(--border-subtle)">
@@ -6702,10 +6753,10 @@
     if (!f || !body || !titleWrap) return;
 
     titleWrap.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%">
-        <div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-width:0">
+        <div style="min-width:0">
           <strong style="font-size:15.5px">New Plan</strong>
-          <div style="font-size:11.5px;color:var(--text-muted)">Set when, category &amp; optional checklist — or use <strong>+ Save &amp; Add Another</strong> for multiple plans</div>
+          <div style="font-size:11px;color:var(--text-muted);line-height:1.3">Set when &amp; category — use <strong>+ Add Another</strong> for rapid multi-entry</div>
         </div>
       </div>
     `;
@@ -6722,10 +6773,10 @@
     ];
 
     const holdPills = [
-      { k: '3h', lbl: '+3 Hours' },
-      { k: '1d', lbl: '+24 Hours' },
+      { k: '3h', lbl: '+3h' },
+      { k: '1d', lbl: '+24h' },
       { k: '2d', lbl: '+2 Days' },
-      { k: '5d', lbl: '+5 Days (Shipping)' },
+      { k: '5d', lbl: '+5d Ship' },
       { k: '7d', lbl: '+7 Days' }
     ];
 
@@ -6746,7 +6797,7 @@
       `;
     } else if (f.whenMode === 'backlog') {
       scheduleDetailHtml = `
-        <div style="font-size:11.5px;color:var(--text-muted);padding:4px 2px">
+        <div style="font-size:11.5px;color:var(--text-muted);padding:3px 2px">
           Saved to Someday / Ideas with no date or alarm until you schedule it.
         </div>
       `;
@@ -6754,15 +6805,28 @@
       const effectiveIso =
         f.planDate ||
         (f.whenMode === 'tomorrow' ? tomIso : f.whenMode === 'week' ? shiftIsoDate(baseIso, 3) : baseIso);
+      const hasTime = Boolean(f.showTimePicker || f.planTime);
+      const timeRowHtml = hasTime
+        ? `
+          <div class="np-time-active-row">
+            <input type="time" id="np-plan-time" class="np-input" value="${esc(f.planTime || '09:00')}">
+            <button type="button" class="np-btn-secondary" data-np-clear-time="1" style="padding:7px 10px;min-height:38px">✕ No Time</button>
+          </div>
+        `
+        : `
+          <div class="np-time-toggle-row">
+            <button type="button" class="np-time-chip" data-np-open-time="1">+ Reminder Time</button>
+            <button type="button" class="np-time-chip preset" data-np-preset-time="09:00">09:00</button>
+            <button type="button" class="np-time-chip preset" data-np-preset-time="13:00">13:00</button>
+            <button type="button" class="np-time-chip preset" data-np-preset-time="18:00">18:00</button>
+          </div>
+        `;
+
       scheduleDetailHtml = `
-        <div class="np-datetime-grid">
+        <div class="np-datetime-2col">
           <div class="np-field-wrap">
             <label class="np-sublabel" for="np-plan-date">Date</label>
             <input type="date" id="np-plan-date" class="np-input" value="${esc(effectiveIso)}">
-          </div>
-          <div class="np-field-wrap">
-            <label class="np-sublabel" for="np-plan-time">Reminder Time (Optional)</label>
-            <input type="time" id="np-plan-time" class="np-input" value="${esc(f.planTime || '')}">
           </div>
           <div class="np-field-wrap">
             <label class="np-sublabel" for="np-recur">Repeat</label>
@@ -6773,12 +6837,21 @@
             </select>
           </div>
         </div>
+        ${timeRowHtml}
       `;
     }
 
     const activeClusterId = f.clusterId || detectCluster(f.title || '', '').id;
     const steps = Array.isArray(f.checklist) ? f.checklist : [];
     const hasAssignee = Boolean(String(f.assigneeName || '').trim());
+    const buMeta = BHFIRMS_BUS.find((b) => b.id === f.buId);
+    const moreSummaryParts = [];
+    if (f.priority === 'p1') moreSummaryParts.push('P1 Critical');
+    else if (f.priority === 'p2') moreSummaryParts.push('P2 High');
+    if (buMeta) moreSummaryParts.push(buMeta.short);
+    if (hasAssignee) moreSummaryParts.push(`@${String(f.assigneeName).trim()}`);
+    if (f.notes) moreSummaryParts.push('Notes');
+    const moreSummaryTxt = moreSummaryParts.length ? moreSummaryParts.join(' · ') : 'Optional';
 
     body.innerHTML = `
       <form id="new-plan-form" class="np-form" autocomplete="off">
@@ -6791,7 +6864,7 @@
             id="np-title"
             class="np-title-input"
             value="${esc(f.title || '')}"
-            placeholder="e.g. Review Q4 plant maintenance, Order spare parts, Weekend trip…"
+            placeholder="e.g. Review Q4 maintenance, Order spare parts…"
             required
           >
         </div>
@@ -6805,7 +6878,7 @@
                   ? 'Someday (unscheduled)'
                   : f.whenMode === 'timer'
                     ? 'Active countdown timer'
-                    : esc(formatIsoFriendly(f.planDate || baseIso, true))
+                    : `${esc(formatIsoFriendly(f.planDate || baseIso, true))}${f.planTime ? ` · ${esc(f.planTime)}` : ''}`
               }
             </span>
           </div>
@@ -6827,7 +6900,7 @@
           <div class="np-label">
             <span>Category</span>
             <span id="np-cat-hint" style="text-transform:none;letter-spacing:0;font-weight:500">${
-              f.manualCluster ? 'Selected' : 'Auto-detected as you type'
+              f.manualCluster ? 'Selected' : 'Auto-detected'
             }</span>
           </div>
           <div class="np-cat-grid">
@@ -6849,7 +6922,7 @@
 
         <div class="np-section">
           <div class="np-label">
-            <span>Checklist Steps (Optional)</span>
+            <span>Checklist Steps</span>
             <span style="text-transform:none;letter-spacing:0;font-weight:500">${steps.length} step${steps.length === 1 ? '' : 's'}</span>
           </div>
           <div class="checklist-drawer-box" style="background:var(--bg-subtle)">
@@ -6871,7 +6944,7 @@
                 class="bento-inline-input"
                 enterkeyhint="done"
                 value="${esc(f.pendingStep || '')}"
-                placeholder="+ Type a step and press Enter…"
+                placeholder="+ Add step & press Enter…"
               >
               <button type="button" class="bento-inline-btn ghost" id="btn-np-add-step">+ Add</button>
             </div>
@@ -6879,91 +6952,111 @@
         </div>
 
         <div class="np-section">
-          <div class="np-label"><span>Details &amp; Delegation (Optional)</span></div>
-          <div class="np-meta-grid-3">
-            <div class="np-field-wrap">
-              <label class="np-sublabel" for="np-priority">Priority</label>
-              <select id="np-priority" class="np-input">
-                <option value="p3" ${(!f.priority || f.priority === 'p3') ? 'selected' : ''}>Normal</option>
-                <option value="p2" ${f.priority === 'p2' ? 'selected' : ''}>P2 · High</option>
-                <option value="p1" ${f.priority === 'p1' ? 'selected' : ''}>P1 · Critical</option>
-              </select>
+          <button type="button" class="np-more-toggle" data-np-toggle-more="1">
+            <span>${f.showMoreDetails ? '▾ Priority, Business Unit, Delegate & Notes' : '+ Priority, Business Unit, Delegate & Notes'}</span>
+            <span style="font-size:11px;color:var(--text-muted);flex-shrink:0">${esc(moreSummaryTxt)}</span>
+          </button>
+
+          <div style="display:${f.showMoreDetails ? 'flex' : 'none'};flex-direction:column;gap:8px;padding-top:2px">
+            <div class="np-meta-grid-3">
+              <div class="np-field-wrap">
+                <label class="np-sublabel" for="np-priority">Priority</label>
+                <select id="np-priority" class="np-input">
+                  <option value="p3" ${(!f.priority || f.priority === 'p3') ? 'selected' : ''}>Normal</option>
+                  <option value="p2" ${f.priority === 'p2' ? 'selected' : ''}>P2 · High</option>
+                  <option value="p1" ${f.priority === 'p1' ? 'selected' : ''}>P1 · Critical</option>
+                </select>
+              </div>
+              <div class="np-field-wrap">
+                <label class="np-sublabel" for="np-bu">Business Unit</label>
+                <select id="np-bu" class="np-input">
+                  <option value="">Personal / General</option>
+                  ${BHFIRMS_BUS.map(
+                    (b) => `<option value="${b.id}" ${f.buId === b.id ? 'selected' : ''}>${esc(b.short)}</option>`
+                  ).join('')}
+                </select>
+              </div>
+              <div class="np-field-wrap">
+                <label class="np-sublabel" for="np-assignee">Delegate To (@Staff)</label>
+                <input
+                  type="text"
+                  id="np-assignee"
+                  class="np-input"
+                  value="${esc(f.assigneeName || '')}"
+                  placeholder="Just me (or type name)"
+                >
+              </div>
             </div>
-            <div class="np-field-wrap">
-              <label class="np-sublabel" for="np-bu">Business Unit</label>
-              <select id="np-bu" class="np-input">
-                <option value="">Personal / General</option>
-                ${BHFIRMS_BUS.map(
-                  (b) => `<option value="${b.id}" ${f.buId === b.id ? 'selected' : ''}>${esc(b.short)}</option>`
-                ).join('')}
-              </select>
-            </div>
-            <div class="np-field-wrap">
-              <label class="np-sublabel" for="np-assignee">Delegate To (@Staff)</label>
-              <input
-                type="text"
-                id="np-assignee"
-                class="np-input"
-                value="${esc(f.assigneeName || '')}"
-                placeholder="Just me (or type name)"
-              >
-            </div>
+            ${
+              state.teamRoster.length > 0
+                ? `
+              <div class="horiz-pill-strip" style="padding-top:2px">
+                <span style="font-size:10.5px;color:var(--text-muted);flex-shrink:0">Team:</span>
+                ${state.teamRoster
+                  .map(
+                    (m) => `
+                  <button type="button" class="mini-chip ${(f.assigneeName || '').toLowerCase() === m.name.toLowerCase() ? 'active' : ''}" data-np-pick-person="${esc(m.name)}" data-np-pick-bu="${esc(m.bu || '')}">
+                    ${esc(m.name)}
+                  </button>
+                `
+                  )
+                  .join('')}
+              </div>
+            `
+                : ''
+            }
+            <textarea
+              id="np-notes"
+              class="np-input"
+              rows="2"
+              placeholder="Optional notes, links, amounts, or context…"
+              style="margin-top:2px"
+            >${esc(f.notes || '')}</textarea>
           </div>
-          ${
-            state.teamRoster.length > 0
-              ? `
-            <div class="horiz-pill-strip" style="padding-top:2px">
-              <span style="font-size:10.5px;color:var(--text-muted);flex-shrink:0">Team:</span>
-              ${state.teamRoster
-                .map(
-                  (m) => `
-                <button type="button" class="mini-chip ${(f.assigneeName || '').toLowerCase() === m.name.toLowerCase() ? 'active' : ''}" data-np-pick-person="${esc(m.name)}" data-np-pick-bu="${esc(m.bu || '')}">
-                  ${esc(m.name)}
-                </button>
-              `
-                )
-                .join('')}
-            </div>
-          `
-              : ''
-          }
-          <textarea
-            id="np-notes"
-            class="np-input"
-            rows="2"
-            placeholder="Optional notes, links, amounts, or context…"
-            style="margin-top:2px"
-          >${esc(f.notes || '')}</textarea>
         </div>
 
         <div class="np-footer">
           <button type="button" class="np-btn-secondary" data-np-cancel="1">Cancel</button>
           <div class="np-footer-right">
-            <button type="submit" class="np-btn-secondary" data-np-submit="another" title="Save this plan and immediately add another one">
-              + Save &amp; Add Another
+            <button
+              type="submit"
+              id="btn-np-add-another"
+              class="np-btn-secondary"
+              data-np-submit="another"
+              title="Save this plan and immediately add another one"
+              style="${hasAssignee ? 'display:none' : ''}"
+            >
+              + Add Another
             </button>
             <button
               type="submit"
               id="btn-np-submit-wa"
               class="delegate-btn-wa"
               data-np-submit="whatsapp"
-              style="padding:8.5px 13px;border-radius:8px;font-size:12px;font-weight:700;${hasAssignee ? '' : 'display:none'}"
+              style="padding:8px 12px;min-height:38px;border-radius:8px;font-size:12px;font-weight:700;${hasAssignee ? '' : 'display:none'}"
             >
-              📲 Assign &amp; WhatsApp
+              📲 WhatsApp
             </button>
-            <button type="submit" class="np-btn-primary" data-np-submit="save">
-              Add Plan
+            <button type="submit" id="btn-np-submit-save" class="np-btn-primary" data-np-submit="save">
+              ${hasAssignee ? 'Assign' : 'Add Plan'}
             </button>
           </div>
         </div>
       </form>
     `;
 
+    body.scrollLeft = 0;
+
     if (focusSelector) {
       setTimeout(() => {
         const el = document.querySelector(focusSelector);
         if (el && typeof el.focus === 'function') {
-          el.focus();
+          try {
+            el.focus({ preventScroll: true });
+          } catch {
+            el.focus();
+          }
+          body.scrollLeft = 0;
           if (focusSelector === '#np-plan-date' && typeof el.showPicker === 'function') {
             try { el.showPicker(); } catch {}
           }
@@ -6975,6 +7068,7 @@
   function openNewPlanSheet(prefillOpts = {}) {
     const backdrop = document.getElementById('sheet-backdrop');
     const dialog = document.getElementById('sheet-dialog');
+    const body = document.getElementById('sheet-body');
     if (!backdrop) return;
 
     state.openClusterSheetId = '';
@@ -7040,20 +7134,29 @@
     }
 
     const ctx = extractSmartContext(initTitle);
+    const initPriority = prefillOpts.priority || state.draft.priority || ctx.priority || 'p3';
+    const initBuId = prefillOpts.buId || state.draft.assigneeBu || ctx.buId || '';
+    const initAssignee = prefillOpts.assigneeName || state.draft.assigneeName || ctx.assigneeName || '';
+    const initNotes = prefillOpts.notes || state.draft.notes || '';
+    const initPlanTime = prefillOpts.planTime || '';
 
     state.newPlanForm = {
       title: initTitle,
       whenMode,
       planDate,
-      planTime: prefillOpts.planTime || '',
+      planTime: initPlanTime,
+      showTimePicker: Boolean(initPlanTime),
       holdChoice,
       recur: prefillOpts.recur || state.draft.recur || 'none',
       clusterId,
       manualCluster,
-      priority: prefillOpts.priority || state.draft.priority || ctx.priority || 'p3',
-      buId: prefillOpts.buId || state.draft.assigneeBu || ctx.buId || '',
-      assigneeName: prefillOpts.assigneeName || state.draft.assigneeName || ctx.assigneeName || '',
-      notes: prefillOpts.notes || state.draft.notes || '',
+      priority: initPriority,
+      buId: initBuId,
+      assigneeName: initAssignee,
+      notes: initNotes,
+      showMoreDetails: Boolean(
+        initPriority !== 'p3' || initBuId || initAssignee || initNotes
+      ),
       checklist: Array.isArray(prefillOpts.checklist)
         ? [...prefillOpts.checklist]
         : parseChecklistStepsFromText(state.draft.checklistRaw || ''),
@@ -7061,7 +7164,20 @@
     };
 
     backdrop.hidden = false;
-    renderNewPlanSheetBody(prefillOpts.focusDate ? '#np-plan-date' : '#np-title');
+    if (body) {
+      body.scrollTop = 0;
+      body.scrollLeft = 0;
+    }
+
+    const isTouchViewport =
+      typeof window !== 'undefined' &&
+      (window.innerWidth <= 820 || Boolean(window.matchMedia?.('(pointer: coarse)')?.matches));
+    const initialFocus = prefillOpts.focusDate
+      ? '#np-plan-date'
+      : prefillOpts.forceFocus || !isTouchViewport
+        ? '#np-title'
+        : '';
+    renderNewPlanSheetBody(initialFocus);
   }
 
   async function submitNewPlanForm(submitMode = 'save') {
@@ -7174,6 +7290,7 @@
         ...f,
         title: '',
         planTime: '',
+        showTimePicker: false,
         notes: '',
         checklist: [],
         pendingStep: ''
@@ -7212,50 +7329,76 @@
       planTimeVal = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
     }
 
+    const hasWbTime = Boolean(planTimeVal);
+
     titleWrap.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%">
-        <div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-width:0">
+        <div style="min-width:0">
           <strong style="font-size:15px">Edit Plan</strong>
-          <div style="font-size:11px;color:var(--text-muted)">${esc(cluster.label)} · Schedule, checklist steps &amp; delegation</div>
+          <div style="font-size:11px;color:var(--text-muted)">${esc(cluster.label)} · Schedule, checklist &amp; delegation</div>
         </div>
       </div>
     `;
 
     body.innerHTML = `
-      <form id="workbench-save-form" class="roster-form-card" style="gap:10px" autocomplete="off">
+      <form id="workbench-save-form" class="np-form" autocomplete="off">
         <input type="hidden" id="wb-task-id" value="${esc(item.id)}">
 
-        <div>
-          <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Plan Title</label>
-          <input type="text" id="wb-title" class="roster-field" value="${esc(item.title)}" required style="margin-top:4px;font-weight:700">
+        <div class="np-section">
+          <label class="np-label" for="wb-title">Plan Title</label>
+          <input type="text" id="wb-title" class="np-title-input" value="${esc(item.title)}" required>
         </div>
 
-        <div class="roster-form-grid-2">
-          <div>
-            <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Planned Date</label>
-            <input type="date" id="wb-plan-date" class="roster-field" value="${esc(planDateVal)}" style="margin-top:4px;width:100%">
+        <div class="np-datetime-2col">
+          <div class="np-field-wrap">
+            <label class="np-sublabel" for="wb-plan-date">Planned Date</label>
+            <input type="date" id="wb-plan-date" class="np-input" value="${esc(planDateVal)}">
           </div>
 
-          <div>
-            <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Reminder Time (Optional)</label>
-            <input type="time" id="wb-plan-time" class="roster-field" value="${esc(planTimeVal)}" style="margin-top:4px;width:100%">
-          </div>
-        </div>
-
-        <div class="roster-form-grid-2">
-          <div>
-            <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Timeline Bucket</label>
-            <select id="wb-horizon" class="roster-field" style="margin-top:4px;width:100%">
+          <div class="np-field-wrap">
+            <label class="np-sublabel" for="wb-horizon">Timeline Bucket</label>
+            <select id="wb-horizon" class="np-input">
               <option value="today" ${(item.horizon || 'today') === 'today' ? 'selected' : ''}>Today</option>
               <option value="tomorrow" ${item.horizon === 'tomorrow' ? 'selected' : ''}>Tomorrow</option>
               <option value="week" ${item.horizon === 'week' ? 'selected' : ''}>This Week &amp; Holds</option>
               <option value="backlog" ${item.horizon === 'backlog' ? 'selected' : ''}>Someday / Ideas</option>
             </select>
           </div>
+        </div>
 
-          <div>
-            <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Priority</label>
-            <select id="wb-priority" class="roster-field" style="margin-top:4px;width:100%">
+        <div id="wb-time-container">
+          ${
+            hasWbTime
+              ? `
+            <div class="np-time-active-row">
+              <input type="time" id="wb-plan-time" class="np-input" value="${esc(planTimeVal)}">
+              <button type="button" class="np-btn-secondary" data-wb-clear-time="1">✕ No Time</button>
+            </div>
+          `
+              : `
+            <div class="np-time-toggle-row">
+              <button type="button" class="np-time-chip" data-wb-open-time="1">+ Reminder Time</button>
+              <button type="button" class="np-time-chip preset" data-wb-preset-time="09:00">09:00</button>
+              <button type="button" class="np-time-chip preset" data-wb-preset-time="13:00">13:00</button>
+              <button type="button" class="np-time-chip preset" data-wb-preset-time="18:00">18:00</button>
+            </div>
+          `
+          }
+        </div>
+
+        <div class="np-datetime-2col">
+          <div class="np-field-wrap">
+            <label class="np-sublabel" for="wb-category-sel">Category</label>
+            <select id="wb-cluster" class="np-input">
+              ${CLUSTERS.map(
+                (c) => `<option value="${c.id}" ${item.category === c.id ? 'selected' : ''}>${esc(c.label)}</option>`
+              ).join('')}
+            </select>
+          </div>
+
+          <div class="np-field-wrap">
+            <label class="np-sublabel" for="wb-priority">Priority</label>
+            <select id="wb-priority" class="np-input">
               <option value="p3" ${(!item.priority || item.priority === 'p3') ? 'selected' : ''}>Normal</option>
               <option value="p2" ${item.priority === 'p2' ? 'selected' : ''}>P2 · High</option>
               <option value="p1" ${item.priority === 'p1' ? 'selected' : ''}>P1 · Critical</option>
@@ -7263,37 +7406,28 @@
           </div>
         </div>
 
-        <div class="roster-form-grid-2">
-          <div>
-            <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Category</label>
-            <select id="wb-cluster" class="roster-field" style="margin-top:4px;width:100%">
-              ${CLUSTERS.map(
-                (c) => `<option value="${c.id}" ${item.category === c.id ? 'selected' : ''}>${esc(c.label)}</option>`
-              ).join('')}
-            </select>
-          </div>
-
-          <div>
-            <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Business Unit</label>
-            <select id="wb-bu" class="roster-field" style="margin-top:4px;width:100%">
+        <div class="np-datetime-2col">
+          <div class="np-field-wrap">
+            <label class="np-sublabel" for="wb-bu">Business Unit</label>
+            <select id="wb-bu" class="np-input">
               <option value="">Personal / General</option>
               ${BHFIRMS_BUS.map(
-                (b) => `<option value="${b.id}" ${item.buId === b.id ? 'selected' : ''}>${esc(b.short)} — ${esc(b.label.replace(/^[^\s]+\s*/, ''))}</option>`
+                (b) => `<option value="${b.id}" ${item.buId === b.id ? 'selected' : ''}>${esc(b.short)}</option>`
               ).join('')}
             </select>
           </div>
-        </div>
 
-        <div>
-          <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Delegate To (@Staff)</label>
-          <input type="text" id="wb-assignee" class="roster-field" value="${esc(item.assigneeName || '')}" placeholder="Just me (or type staff name)" style="margin-top:4px;width:100%">
+          <div class="np-field-wrap">
+            <label class="np-sublabel" for="wb-assignee">Delegate To (@Staff)</label>
+            <input type="text" id="wb-assignee" class="np-input" value="${esc(item.assigneeName || '')}" placeholder="Just me (or name)">
+          </div>
         </div>
 
         ${
           state.teamRoster.length > 0
             ? `
           <div class="horiz-pill-strip">
-            <span style="font-size:10.5px;color:var(--text-muted);flex-shrink:0">Quick Pick:</span>
+            <span style="font-size:10.5px;color:var(--text-muted);flex-shrink:0">Team:</span>
             ${state.teamRoster
               .map(
                 (m) => `
@@ -7308,12 +7442,12 @@
             : ''
         }
 
-        <div>
-          <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Notes &amp; Context</label>
-          <textarea id="wb-notes" class="roster-field" rows="2" placeholder="Add context, links, amounts, or delegation instructions…" style="margin-top:4px;width:100%">${esc(item.notes || '')}</textarea>
+        <div class="np-field-wrap">
+          <label class="np-sublabel" for="wb-notes">Notes &amp; Context</label>
+          <textarea id="wb-notes" class="np-input" rows="2" placeholder="Add context, links, amounts, or instructions…">${esc(item.notes || '')}</textarea>
         </div>
 
-        <div class="checklist-drawer-box">
+        <div class="checklist-drawer-box" style="background:var(--bg-subtle)">
           <div style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">
             Checklist Steps (${doneSteps}/${steps.length} completed)
           </div>
@@ -7329,20 +7463,24 @@
             )
             .join('')}
           <div style="display:flex;gap:6px;margin-top:4px">
-            <input type="text" class="bento-inline-input" data-step-input-for="${esc(item.id)}" placeholder="+ Type a step and press Enter…">
-            <button type="button" class="bento-inline-btn" data-act="add-step" data-id="${esc(item.id)}">+ Add</button>
+            <input type="text" class="bento-inline-input" data-step-input-for="${esc(item.id)}" placeholder="+ Add step & press Enter…">
+            <button type="button" class="bento-inline-btn ghost" data-act="add-step" data-id="${esc(item.id)}">+ Add</button>
           </div>
         </div>
 
-        <div class="roster-form-actions">
-          <button type="submit" class="delegate-btn-assign primary" data-wb-submit="save">✓ Save Plan</button>
-          <button type="submit" class="delegate-btn-wa" data-wb-submit="whatsapp">📲 Save &amp; WhatsApp</button>
-          <button type="button" class="t-act-btn danger" data-act="delete" data-id="${esc(item.id)}">✕ Delete</button>
+        <div class="np-footer">
+          <button type="button" class="t-act-btn danger" data-act="delete" data-id="${esc(item.id)}" style="min-height:38px;padding:7px 11px">✕ Delete</button>
+          <div class="np-footer-right">
+            <button type="submit" class="delegate-btn-wa" data-wb-submit="whatsapp" style="min-height:38px;padding:8px 11px">📲 WhatsApp</button>
+            <button type="submit" class="np-btn-primary" data-wb-submit="save">✓ Save</button>
+          </div>
         </div>
       </form>
     `;
 
     backdrop.hidden = false;
+    body.scrollTop = 0;
+    body.scrollLeft = 0;
   }
 
   function openNotificationCenterSheet(preserveViewedSnapshot = false) {
@@ -8706,6 +8844,12 @@
         return;
       }
 
+      if (e.target.closest('[data-toggle-del-studio-more]')) {
+        state.delStudioMoreOpen = !state.delStudioMoreOpen;
+        renderDelegatedView();
+        return;
+      }
+
       const studioPickPerson = e.target.closest('[data-studio-pick-person]');
       if (studioPickPerson) {
         const pName = studioPickPerson.getAttribute('data-studio-pick-person') || '';
@@ -9072,10 +9216,28 @@
         return;
       }
 
-      // Open Bento Cluster Sheet (when clicking card header or "+N more")
+      // Open Bento Cluster Sheet (or on mobile when empty, toggle inline quick-add right in place)
       const tile = e.target.closest('[data-open-cluster]');
       if (tile) {
-        openClusterSheet(tile.getAttribute('data-open-cluster'));
+        const cId = tile.getAttribute('data-open-cluster') || '';
+        const parentTile = tile.closest('.bento-tile');
+        if (
+          typeof window !== 'undefined' &&
+          window.innerWidth <= 720 &&
+          parentTile &&
+          parentTile.classList.contains('is-empty-mobile')
+        ) {
+          state.activeInlineClusterId = state.activeInlineClusterId === cId ? '' : cId;
+          renderPlanningView();
+          if (state.activeInlineClusterId) {
+            setTimeout(() => {
+              const inp = document.querySelector(`[data-card-inline-input="${CSS.escape(cId)}"]`);
+              if (inp) inp.focus({ preventScroll: true });
+            }, 15);
+          }
+          return;
+        }
+        openClusterSheet(cId);
         return;
       }
 
@@ -9385,6 +9547,35 @@
         showToast('Removed from team roster');
         return;
       }
+      if (
+        e.target.closest('[data-wb-open-time]') ||
+        e.target.closest('[data-wb-preset-time]') ||
+        e.target.closest('[data-wb-clear-time]')
+      ) {
+        const box = document.getElementById('wb-time-container');
+        if (box) {
+          if (e.target.closest('[data-wb-clear-time]')) {
+            box.innerHTML = `
+              <div class="np-time-toggle-row">
+                <button type="button" class="np-time-chip" data-wb-open-time="1">+ Reminder Time</button>
+                <button type="button" class="np-time-chip preset" data-wb-preset-time="09:00">09:00</button>
+                <button type="button" class="np-time-chip preset" data-wb-preset-time="13:00">13:00</button>
+                <button type="button" class="np-time-chip preset" data-wb-preset-time="18:00">18:00</button>
+              </div>
+            `;
+          } else {
+            const presetVal = e.target.closest('[data-wb-preset-time]')?.getAttribute('data-wb-preset-time') || '09:00';
+            box.innerHTML = `
+              <div class="np-time-active-row">
+                <input type="time" id="wb-plan-time" class="np-input" value="${esc(presetVal)}">
+                <button type="button" class="np-btn-secondary" data-wb-clear-time="1">✕ No Time</button>
+              </div>
+            `;
+          }
+        }
+        return;
+      }
+
       handleTaskInteraction(e);
     });
 
@@ -9393,6 +9584,34 @@
       if (state.openSheetKind !== 'new_plan' || !state.newPlanForm) return;
       if (e.target.closest('[data-np-cancel]')) {
         closeActiveSheet();
+        return;
+      }
+      if (e.target.closest('[data-np-open-time]')) {
+        syncNewPlanDomFieldsToState();
+        state.newPlanForm.showTimePicker = true;
+        if (!state.newPlanForm.planTime) state.newPlanForm.planTime = '09:00';
+        renderNewPlanSheetBody('#np-plan-time');
+        return;
+      }
+      const presetTimeBtn = e.target.closest('[data-np-preset-time]');
+      if (presetTimeBtn) {
+        syncNewPlanDomFieldsToState();
+        state.newPlanForm.planTime = presetTimeBtn.getAttribute('data-np-preset-time') || '09:00';
+        state.newPlanForm.showTimePicker = true;
+        renderNewPlanSheetBody();
+        return;
+      }
+      if (e.target.closest('[data-np-clear-time]')) {
+        syncNewPlanDomFieldsToState();
+        state.newPlanForm.planTime = '';
+        state.newPlanForm.showTimePicker = false;
+        renderNewPlanSheetBody();
+        return;
+      }
+      if (e.target.closest('[data-np-toggle-more]')) {
+        syncNewPlanDomFieldsToState();
+        state.newPlanForm.showMoreDetails = !state.newPlanForm.showMoreDetails;
+        renderNewPlanSheetBody();
         return;
       }
       const whenBtn = e.target.closest('[data-np-when]');
@@ -9568,15 +9787,24 @@
               asgEl.value = ctx.assigneeName;
               state.newPlanForm.assigneeName = ctx.assigneeName;
               const waBtn = document.getElementById('btn-np-submit-wa');
+              const addAnotherBtn = document.getElementById('btn-np-add-another');
+              const saveBtn = document.getElementById('btn-np-submit-save');
               if (waBtn) waBtn.style.display = '';
+              if (addAnotherBtn) addAnotherBtn.style.display = 'none';
+              if (saveBtn) saveBtn.textContent = 'Assign';
             }
           }
           return;
         }
         if (e.target.id === 'np-assignee') {
           state.newPlanForm.assigneeName = e.target.value;
+          const hasAsg = Boolean(e.target.value.trim());
           const waBtn = document.getElementById('btn-np-submit-wa');
-          if (waBtn) waBtn.style.display = e.target.value.trim() ? '' : 'none';
+          const addAnotherBtn = document.getElementById('btn-np-add-another');
+          const saveBtn = document.getElementById('btn-np-submit-save');
+          if (waBtn) waBtn.style.display = hasAsg ? '' : 'none';
+          if (addAnotherBtn) addAnotherBtn.style.display = hasAsg ? 'none' : '';
+          if (saveBtn) saveBtn.textContent = hasAsg ? 'Assign' : 'Add Plan';
           return;
         }
         if (e.target.id === 'np-plan-date') {
@@ -9742,7 +9970,7 @@
         }
       });
       navigator.serviceWorker
-        .register('./sw.js?v=26', { updateViaCache: 'none' })
+        .register('./sw.js?v=27', { updateViaCache: 'none' })
         .then(async (reg) => {
           reg.update().catch(() => {});
           if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
@@ -9801,7 +10029,11 @@
     }
 
     window.addEventListener('resize', () => {
-      if (state.activeTab === 'planning' && !isFormControlFocused()) renderPlanningView();
+      if (!isFormControlFocused()) {
+        renderLiveAdvisorDrawer();
+        if (state.activeTab === 'planning') renderPlanningView();
+        else if (state.activeTab === 'delegated') renderDelegatedView();
+      }
     });
     window.addEventListener('storage', (e) => {
       if (e.key === STORAGE_KEY || e.key === LEGACY_LEDGER_KEY || e.key === NOTIF_INBOX_KEY) {
