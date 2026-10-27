@@ -1,19 +1,19 @@
-/* Planner — Standalone Executive & Personal PWA for Planning, Tasks, Delegation, 100% Score & Shia Prayer Times (Service Worker v29) */
-const CACHE_NAME = 'bhf-planner-v29';
+/* Planner — Standalone Executive & Personal PWA for Planning, Tasks, Delegation, 100% Score & Shia Prayer Times (Service Worker v30) */
+const CACHE_NAME = 'bhf-planner-v30';
 const NAV_CACHE = 'theo-cmd-nav-handoff-v1';
 const PENDING_NAV_URL = './__theo_cmd_pending_nav.json';
 const UNREAD_NOTIFS_URL = './__theo_cmd_unread_notifs.json';
 const APP_SHELL = [
   './',
   './index.html',
-  './css/command.css?v=29',
-  './js/endpoints.js?v=29',
-  './js/app.js?v=29',
-  './manifest.json?v=29',
-  './icon.svg?v=29',
-  './icon-180.png?v=29',
-  './icon-192.png?v=29',
-  './icon-512.png?v=29'
+  './css/command.css?v=30',
+  './js/endpoints.js?v=30',
+  './js/app.js?v=30',
+  './manifest.json?v=30',
+  './icon.svg?v=30',
+  './icon-180.png?v=30',
+  './icon-192.png?v=30',
+  './icon-512.png?v=30'
 ];
 
 self.addEventListener('install', (event) => {
@@ -83,8 +83,8 @@ function buildNotifOptions(d, isRepeat = false) {
   const nav = buildCmdDeepLink(d);
   return {
     body: d.body || 'Tap to open Planner.',
-    icon: './icon-192.png?v=28',
-    badge: './icon-192.png?v=28',
+    icon: './icon-192.png?v=30',
+    badge: './icon-192.png?v=30',
     tag: d.tag || 'theo-cmd-notif',
     renotify: !isRepeat,
     silent: Boolean(isRepeat),

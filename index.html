@@ -9,13 +9,13 @@
   <meta name="apple-mobile-web-app-title" content="Planner">
   <meta name="description" content="Planner — Executive Planning, Horizon Agenda, BHFIRMS Delegation &amp; Accountability, Daily 100% Score &amp; Shia Prayer Times.">
   <title>Planner — Executive Planning, Delegation, Tasks, Score &amp; Prayer Times</title>
-  <link rel="manifest" href="manifest.json?v=29">
-  <link rel="icon" type="image/svg+xml" href="icon.svg?v=29">
-  <link rel="apple-touch-icon" href="icon-180.png?v=29">
+  <link rel="manifest" href="manifest.json?v=30">
+  <link rel="icon" type="image/svg+xml" href="icon.svg?v=30">
+  <link rel="apple-touch-icon" href="icon-180.png?v=30">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/command.css?v=29">
+  <link rel="stylesheet" href="css/command.css?v=30">
   <script id="pre">
     (() => {
       try {
@@ -40,7 +40,7 @@
     <!-- Architectural Rev 10 Top HUD Ribbon -->
     <header class="hud-ribbon" id="hud-ribbon">
       <div class="hud-left">
-        <img src="icon.svg?v=28" alt="Planner" class="hud-logo">
+        <img src="icon.svg?v=30" alt="Planner" class="hud-logo">
         <div class="hud-brand-copy">
           <div class="hud-brand-row">
             <span class="hud-brand-name">PLANNER</span>
@@ -139,16 +139,17 @@
           <select id="draft-cluster-select" class="capture-select-pill" aria-label="Category">
             <option value="" id="draft-cluster-auto-opt">Category: Auto</option>
             <option value="work">Work &amp; BUs</option>
-            <option value="people">People</option>
-            <option value="family">Family</option>
-            <option value="want_to_do">Want To Do</option>
             <option value="payments">Payments</option>
+            <option value="family">Family</option>
+            <option value="people">People</option>
             <option value="verify">Verify / App</option>
             <option value="shipping">Shipping</option>
+            <option value="want_to_do">Want To Do</option>
             <option value="ideas">Ideas</option>
           </select>
           <select id="draft-when-select" class="capture-select-pill" aria-label="When">
             <option value="auto" id="draft-when-auto-opt">When: Today</option>
+            <option value="all_dates" id="draft-when-clear-filter-opt" hidden>Show All Dates</option>
             <option value="today">Today</option>
             <option value="tomorrow">Tomorrow</option>
             <option value="week">This Week</option>
@@ -246,7 +247,7 @@
   <!-- Toast Stack -->
   <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
 
-  <script src="js/endpoints.js?v=28"></script>
-  <script src="js/app.js?v=28"></script>
+  <script src="js/endpoints.js?v=30"></script>
+  <script src="js/app.js?v=30"></script>
 </body>
 </html>

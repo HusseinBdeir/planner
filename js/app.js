@@ -304,6 +304,7 @@
     showInlineNewPerson: false,
     fastDelPersonId: '',
     expandedRowId: '',
+    clusterPickerRowId: '',
     activeInlineClusterId: '',
     openClusterSheetId: '',
     openTaskWorkbenchId: '',
@@ -1065,11 +1066,94 @@
     };
   }
 
-  function detectCluster(text = '', override = '') {
-    if (override) {
-      return CLUSTERS.find((c) => c.id === override) || CLUSTERS[0];
+  const DEFAULT_CLUSTER_PRIORITY_ORDER = [
+    'work',
+    'payments',
+    'family',
+    'people',
+    'verify',
+    'shipping',
+    'want_to_do',
+    'ideas'
+  ];
+
+  function getClustersByFrequency() {
+    const counts = new Map();
+    const activeCounts = new Map();
+    const latestTs = new Map();
+    for (const c of CLUSTERS) {
+      counts.set(c.id, 0);
+      activeCounts.set(c.id, 0);
+      latestTs.set(c.id, 0);
     }
-    const s = String(text || '').toLowerCase();
+    for (const r of state.reminders) {
+      if (!r || r.deleted) continue;
+      const cid = CLUSTERS.some((c) => c.id === r.category) ? r.category : 'work';
+      counts.set(cid, (counts.get(cid) || 0) + 1);
+      if (!r.completed) {
+        activeCounts.set(cid, (activeCounts.get(cid) || 0) + 1);
+      }
+      const ts = Number(r.updatedAt || r.createdAt || 0);
+      if (ts > (latestTs.get(cid) || 0)) {
+        latestTs.set(cid, ts);
+      }
+    }
+    return [...CLUSTERS].sort((a, b) => {
+      const totDiff = (counts.get(b.id) || 0) - (counts.get(a.id) || 0);
+      if (totDiff !== 0) return totDiff;
+      const actDiff = (activeCounts.get(b.id) || 0) - (activeCounts.get(a.id) || 0);
+      if (actDiff !== 0) return actDiff;
+      const tsDiff = (latestTs.get(b.id) || 0) - (latestTs.get(a.id) || 0);
+      if (tsDiff !== 0) return tsDiff;
+      const rankA = DEFAULT_CLUSTER_PRIORITY_ORDER.indexOf(a.id);
+      const rankB = DEFAULT_CLUSTER_PRIORITY_ORDER.indexOf(b.id);
+      return (rankA === -1 ? 99 : rankA) - (rankB === -1 ? 99 : rankB);
+    });
+  }
+
+  function getBusByFrequency() {
+    const counts = new Map();
+    const activeCounts = new Map();
+    const latestTs = new Map();
+    for (const b of BHFIRMS_BUS) {
+      counts.set(b.id, 0);
+      activeCounts.set(b.id, 0);
+      latestTs.set(b.id, 0);
+    }
+    for (const r of state.reminders) {
+      if (!r || r.deleted || !r.buId) continue;
+      if (!counts.has(r.buId)) continue;
+      counts.set(r.buId, (counts.get(r.buId) || 0) + 1);
+      if (!r.completed) {
+        activeCounts.set(r.buId, (activeCounts.get(r.buId) || 0) + 1);
+      }
+      const ts = Number(r.updatedAt || r.createdAt || 0);
+      if (ts > (latestTs.get(r.buId) || 0)) {
+        latestTs.set(r.buId, ts);
+      }
+    }
+    return [...BHFIRMS_BUS].sort((a, b) => {
+      const totDiff = (counts.get(b.id) || 0) - (counts.get(a.id) || 0);
+      if (totDiff !== 0) return totDiff;
+      const actDiff = (activeCounts.get(b.id) || 0) - (activeCounts.get(a.id) || 0);
+      if (actDiff !== 0) return actDiff;
+      const tsDiff = (latestTs.get(b.id) || 0) - (latestTs.get(a.id) || 0);
+      if (tsDiff !== 0) return tsDiff;
+      return BHFIRMS_BUS.findIndex((x) => x.id === a.id) - BHFIRMS_BUS.findIndex((x) => x.id === b.id);
+    });
+  }
+
+  function detectCluster(text = '', override = '') {
+    const freqClusters = getClustersByFrequency();
+    const topCluster = freqClusters[0] || CLUSTERS.find((c) => c.id === 'work') || CLUSTERS[0];
+    if (override) {
+      return CLUSTERS.find((c) => c.id === override) || topCluster;
+    }
+    const trimmed = String(text || '').trim();
+    if (!trimmed) {
+      return topCluster;
+    }
+    const s = trimmed.toLowerCase();
     const hasBu = Boolean(extractSmartContext(text).buId);
     // 1. Ideas for later & Want to do (unless explicitly @Person delegated or BHFIRMS BU matched)
     if (
@@ -1117,7 +1201,10 @@
     ) {
       return CLUSTERS.find((c) => c.id === 'payments');
     }
-    return CLUSTERS.find((c) => c.id === 'work');
+    if (hasBu) {
+      return CLUSTERS.find((c) => c.id === 'work') || topCluster;
+    }
+    return topCluster;
   }
 
   function epochToIsoLocal(ms) {
@@ -2906,8 +2993,8 @@
             const isPrayer = Boolean(payload.openPrayer || payload.tab === 'prayers');
             reg.showNotification(payload.title || 'Planner', {
               body: payload.body || '',
-              icon: './icon-192.png?v=28',
-              badge: './icon-192.png?v=28',
+              icon: './icon-192.png?v=30',
+              badge: './icon-192.png?v=30',
               tag: payload.tag || 'theo-cmd-notif',
               renotify: false,
               requireInteraction: Boolean(payload.requireInteraction),
@@ -4310,8 +4397,26 @@
           : 'Category: Auto';
     }
     if (clusterSel && document.activeElement !== clusterSel) {
-      clusterSel.value = state.draft.clusterOverride || '';
-      clusterSel.classList.toggle('is-customized', Boolean(state.draft.clusterOverride));
+      const freqOrder = getClustersByFrequency();
+      const curVal = state.draft.clusterOverride || '';
+      const existingOpts = new Map();
+      Array.from(clusterSel.options).forEach((opt) => {
+        if (opt.value) existingOpts.set(opt.value, opt);
+      });
+      for (const c of freqOrder) {
+        const opt = existingOpts.get(c.id);
+        if (opt) clusterSel.appendChild(opt);
+      }
+      clusterSel.value = curVal;
+      clusterSel.classList.toggle('is-customized', Boolean(curVal));
+    }
+
+    const whenClearFilterOpt = document.getElementById('draft-when-clear-filter-opt');
+    if (whenClearFilterOpt) {
+      whenClearFilterOpt.hidden = !selIso;
+      whenClearFilterOpt.textContent = selIso
+        ? `Show All Dates (${state.reminders.filter((r) => !r.completed && !r.deleted).length})`
+        : 'Show All Dates';
     }
 
     if (whenAutoOpt) {
@@ -4327,7 +4432,10 @@
     if (whenSel && document.activeElement !== whenSel) {
       const wVal = state.draft.whenSelect || 'auto';
       whenSel.value = wVal;
-      whenSel.classList.toggle('is-customized', wVal !== 'auto' || Boolean(selIso));
+      whenSel.classList.toggle(
+        'is-customized',
+        wVal !== 'auto' || Boolean(selIso && selIso !== todayIso())
+      );
     }
 
     if (delGroup && delBtn && delLbl) {
@@ -4470,7 +4578,11 @@
       const meta = stMap[st] || stMap.assigned;
       delBadge = `<span class="t-pill ${meta.cls}">${esc(meta.lbl)}</span>`;
     } else if (item.subTag) {
-      delBadge = `<span class="t-pill">${esc(item.subTag)}</span>`;
+      const normSub = String(item.subTag).replace(/[\s·•-]+/g, '').toLowerCase();
+      const normBu = buMeta ? String(buMeta.short).replace(/[\s·•-]+/g, '').toLowerCase() : '';
+      if (!normBu || normSub !== normBu) {
+        delBadge = `<span class="t-pill">${esc(item.subTag)}</span>`;
+      }
     }
 
     const doneVerb =
@@ -4641,7 +4753,7 @@
                   ? `<button type="button" class="t-act-btn" data-act="release-now" data-id="${esc(item.id)}">Ready Now</button>`
                   : ''
               }
-              <button type="button" class="t-act-btn" data-act="move-cluster" data-id="${esc(item.id)}">Cluster</button>
+              <button type="button" class="t-act-btn ${state.clusterPickerRowId === item.id ? 'primary' : ''}" data-act="move-cluster" data-id="${esc(item.id)}">Group: ${esc(cluster.shortLabel)} ▾</button>
             `
                 : `
               <button type="button" class="t-act-btn" data-act="toggle-done" data-id="${esc(item.id)}">↺ Reopen</button>
@@ -4649,6 +4761,28 @@
             }
             <button type="button" class="t-act-btn danger" data-act="delete" data-id="${esc(item.id)}">✕</button>
           </div>
+          ${
+            !item.completed && state.clusterPickerRowId === item.id
+              ? `
+            <div class="ticker-cluster-picker">
+              <span class="ticker-cluster-picker-lbl">Group:</span>
+              ${getClustersByFrequency()
+                .map(
+                  (c) => `
+                <button
+                  type="button"
+                  class="mini-chip ${(item.category || 'work') === c.id ? 'active' : ''}"
+                  data-act="set-cluster"
+                  data-id="${esc(item.id)}"
+                  data-cluster="${c.id}"
+                >${esc(c.shortLabel)}</button>
+              `
+                )
+                .join('')}
+            </div>
+          `
+              : ''
+          }
         </div>
 
         ${
@@ -4840,6 +4974,11 @@
           </button>
         </div>
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          ${
+            selDate !== 'all'
+              ? `<button type="button" class="mini-chip active" data-plan-date="all" title="Clear single-date filter and show all active tasks">${esc(formatIsoFriendly(selDate, false))} (${active.length}/${allActive.length}) · Show All ✕</button>`
+              : ''
+          }
           <button type="button" class="mini-chip" id="btn-auto-plan-today" title="Promote matured holds, urgent items & due-today items into Today">
             Auto-Focus Today
           </button>
@@ -5046,7 +5185,7 @@
         { id: 'personal', title: 'Personal, Family & Ideas', sub: 'Home · Verify Checks · Strategic Concepts' }
       ];
 
-      const cardsHtml = buCards
+      const buWithItems = buCards
         .map((bu) => {
           const buItems = active.filter((r) => {
             if (bu.id === 'personal') {
@@ -5057,41 +5196,52 @@
             }
             return r.buId === bu.id;
           });
-          const delCount = buItems.filter((r) => r.isDelegated).length;
-
-          return `
-            <div class="bu-plan-card">
-              <div class="bu-plan-head">
-                <div>
-                  <div style="font-size:13px;font-weight:700;color:var(--text-primary)">${esc(bu.title)}</div>
-                  <div style="font-size:10.5px;color:var(--text-muted)">${esc(bu.sub)}</div>
-                </div>
-                <div style="display:flex;align-items:center;gap:4px">
-                  ${delCount > 0 ? `<span class="t-pill person tabular">${delCount} delegated</span>` : ''}
-                  <span class="bento-count ${buItems.length ? 'active' : ''} tabular">${buItems.length}</span>
-                </div>
-              </div>
-              <form class="bento-inline-form" data-inline-bu-form="${bu.id}" style="padding:4px 0 6px 0;border-bottom:1px solid var(--border-subtle)">
-                <input type="text" class="bento-inline-input" enterkeyhint="done" placeholder="+ Add plan for ${esc(bu.title.split('&')[0].trim())}…" required>
-                <button type="submit" class="bento-inline-btn">Add</button>
-              </form>
-              <div class="bu-plan-body">
-                ${
-                  buItems.length
-                    ? buItems.map((it) => renderTickerRowHtml(it, now)).join('')
-                    : `<div style="padding:18px 10px;text-align:center;color:var(--text-muted);font-size:11.5px">No active plans for ${esc(bu.title)}</div>`
-                }
-              </div>
-            </div>
-          `;
+          return { bu, buItems };
         })
-        .join('');
+        .filter((entry) => entry.buItems.length > 0)
+        .sort((a, b) => b.buItems.length - a.buItems.length);
+
+      const cardsHtml = buWithItems.length
+        ? buWithItems
+            .map(({ bu, buItems }) => {
+              const delCount = buItems.filter((r) => r.isDelegated).length;
+
+              return `
+                <div class="bu-plan-card">
+                  <div class="bu-plan-head">
+                    <div>
+                      <div style="font-size:13px;font-weight:700;color:var(--text-primary)">${esc(bu.title)}</div>
+                      <div style="font-size:10.5px;color:var(--text-muted)">${esc(bu.sub)}</div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:4px">
+                      ${delCount > 0 ? `<span class="t-pill person tabular">${delCount} delegated</span>` : ''}
+                      <span class="bento-count active tabular">${buItems.length}</span>
+                    </div>
+                  </div>
+                  <form class="bento-inline-form" data-inline-bu-form="${bu.id}" style="padding:4px 0 6px 0;border-bottom:1px solid var(--border-subtle)">
+                    <input type="text" class="bento-inline-input" enterkeyhint="done" placeholder="+ Add plan for ${esc(bu.title.split('&')[0].trim())}…" required>
+                    <button type="submit" class="bento-inline-btn">Add</button>
+                  </form>
+                  <div class="bu-plan-body">
+                    ${buItems.map((it) => renderTickerRowHtml(it, now)).join('')}
+                  </div>
+                </div>
+              `;
+            })
+            .join('')
+        : `<div class="bento-tile" style="padding:24px 16px;align-items:center;text-align:center;gap:8px">
+            <div style="font-size:13px;font-weight:600;color:var(--text-secondary)">No active Business Unit plans${selDate !== 'all' ? ` for ${esc(formatIsoFriendly(selDate, true))}` : ''}</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
+              ${selDate !== 'all' && allActive.length > 0 ? `<button type="button" class="mini-chip active" data-plan-date="all">Show All Plans (${allActive.length})</button>` : ''}
+              <button type="button" class="bento-inline-btn" data-open-new-plan="1">+ New Plan</button>
+            </div>
+          </div>`;
 
       root.innerHTML = `
         ${weekStripHtml}
         ${activeDateBarHtml}
         ${toolbarHtml}
-        <div class="bu-board-grid">
+        <div class="bu-board-grid" data-tile-count="${Math.max(1, buWithItems.length)}">
           ${cardsHtml}
         </div>
         ${buildCompletedArchiveSectionHtml(completed, now)}
@@ -5101,6 +5251,7 @@
 
     // MODE D: STRUCTURED REGISTER (CLUSTERS / SUBTOPICS)
     if (state.planningMode !== 'radar') {
+      const freqClusters = getClustersByFrequency();
       const filtered =
         state.boardFilter === 'completed'
           ? completed
@@ -5111,7 +5262,7 @@
       let listHtml = '';
       if (state.boardFilter === 'all') {
         const groups = new Map();
-        for (const c of CLUSTERS) {
+        for (const c of freqClusters) {
           const cItems = active.filter((r) => (r.category || 'work') === c.id);
           if (cItems.length) {
             groups.set(c.label, cItems);
@@ -5144,14 +5295,17 @@
             <button type="button" class="filter-pill ${state.boardFilter === 'completed' ? 'active' : ''}" data-board-filter="completed">
               Completed (${completed.length})
             </button>
-            ${CLUSTERS.map((c) => {
-              const cnt = active.filter((r) => (r.category || 'work') === c.id).length;
-              return `
-                <button type="button" class="filter-pill ${state.boardFilter === c.id ? 'active' : ''}" data-board-filter="${c.id}">
-                  ${esc(c.shortLabel)} (${cnt})
-                </button>
-              `;
-            }).join('')}
+            ${freqClusters
+              .map((c) => {
+                const cnt = active.filter((r) => (r.category || 'work') === c.id).length;
+                if (cnt === 0 && state.boardFilter !== c.id) return '';
+                return `
+                  <button type="button" class="filter-pill ${state.boardFilter === c.id ? 'active' : ''}" data-board-filter="${c.id}">
+                    ${esc(c.shortLabel)} (${cnt})
+                  </button>
+                `;
+              })
+              .join('')}
           </div>
         </div>
         <div class="ticker-list">
@@ -5165,9 +5319,11 @@
       return;
     }
 
-    // MODE A: CALM 2X4 CATEGORY MATRIX
+    // MODE A: CALM CATEGORY MATRIX (ONLY NON-EMPTY GROUPS, ORDERED BY FREQUENCY)
     const isMobileViewport = typeof window !== 'undefined' && window.innerWidth <= 720;
-    const maxPreviewRows = isMobileViewport ? 8 : 5;
+    const maxPreviewRows = isMobileViewport ? 12 : 8;
+    const freqClusters = getClustersByFrequency();
+    const freqRankMap = new Map(freqClusters.map((c, idx) => [c.id, idx]));
 
     // Include items checked within the last 2.2s so checking multiple tasks in a group on iPhone never shifts or collapses the list mid-check
     const getClusterDisplayItems = (clusterId) =>
@@ -5180,160 +5336,183 @@
         return isRecentlyCompleted(r, now);
       });
 
-    const orderedClusters = isMobileViewport
-      ? [...CLUSTERS].sort((a, b) => {
-          const aHas = getClusterDisplayItems(a.id).length > 0 ? 1 : 0;
-          const bHas = getClusterDisplayItems(b.id).length > 0 ? 1 : 0;
-          return bHas - aHas;
-        })
-      : CLUSTERS;
+    const getClusterTotalActiveCount = (clusterId) =>
+      allActive.filter((r) => (r.category || 'work') === clusterId).length;
 
-    const tilesHtml = orderedClusters.map((c) => {
-      const items = getClusterDisplayItems(c.id);
-      const activeCount = items.filter((r) => !r.completed).length;
-      const isComposerOpen = state.activeInlineClusterId === c.id;
-      const tileCls = [
-        'bento-tile',
-        items.length === 0 ? 'is-empty-mobile' : '',
-        isComposerOpen ? 'has-open-composer' : ''
-      ]
-        .filter(Boolean)
-        .join(' ');
-
-      const topRows = items.slice(0, maxPreviewRows).map((it) => {
-        const isChecked = Boolean(it.completed);
-        const t = Number(it.matureAt || it.dueAt || 0);
-        const isReady = !isChecked && isReadyNowItem(it, now);
-        const steps = Array.isArray(it.checklist) ? it.checklist : [];
-        const doneSteps = steps.filter((s) => s.done).length;
-        const buMeta = BHFIRMS_BUS.find((b) => b.id === it.buId);
-        const rIso = itemIsoDate(it);
-        const priDot =
-          !isChecked && it.priority === 'p1'
-            ? `<span style="width:6px;height:6px;border-radius:50%;background:var(--crimson);flex-shrink:0" title="P1 Critical"></span>`
-            : !isChecked && it.priority === 'p2'
-              ? `<span style="width:6px;height:6px;border-radius:50%;background:var(--amber);flex-shrink:0" title="P2 High"></span>`
-              : '';
-
-        let tagTxt = '';
-        let tagCls = '';
-        if (isChecked) {
-          tagTxt = '✓ Done';
-          tagCls = 'matured';
-        } else if (it.delegationStatus === 'done') {
-          tagTxt = 'Verify';
-          tagCls = 'matured';
-        } else if (isReady) {
-          tagTxt = 'Ready';
-          tagCls = 'matured';
-        } else if (it.assigneeName) {
-          tagTxt = it.assigneeName;
-          tagCls = 'person';
-        } else if (steps.length > 0) {
-          tagTxt = `${doneSteps}/${steps.length}`;
-        } else if (t > now) {
-          tagTxt = formatCountdown(t, now);
-          tagCls = 'timer';
-        } else if (rIso && rIso > baseIso) {
-          tagTxt = rIso === shiftIsoDate(baseIso, 1) ? 'Tomorrow' : formatIsoFriendly(rIso, false);
-        } else if (buMeta) {
-          tagTxt = buMeta.short;
-        }
-
-        return `
-          <div class="bento-micro-row ${isChecked ? 'is-checked' : ''}" data-open-workbench="${esc(it.id)}" title="Tap circle to complete or tap title to edit">
-            <button
-              type="button"
-              class="bento-micro-check ${isChecked ? 'checked' : ''}"
-              data-act="toggle-done"
-              data-id="${esc(it.id)}"
-              title="${isChecked ? 'Undo complete' : 'Complete'}"
-            >✓</button>
-            ${priDot}
-            <span class="bento-micro-text">${esc(it.title)}</span>
-            ${
-              tagTxt
-                ? `<span class="bento-micro-tag ${tagCls} tabular">${esc(tagTxt)}</span>`
-                : ''
-            }
-          </div>
-        `;
+    const visibleClusters = freqClusters
+      .filter((c) => getClusterDisplayItems(c.id).length > 0 || state.activeInlineClusterId === c.id)
+      .sort((a, b) => {
+        const aItems = getClusterDisplayItems(a.id).filter((r) => !r.completed).length;
+        const bItems = getClusterDisplayItems(b.id)
+          .filter((r) => !r.completed).length;
+        if (bItems !== aItems) return bItems - aItems;
+        return (freqRankMap.get(a.id) ?? 99) - (freqRankMap.get(b.id) ?? 99);
       });
 
-      const emptyStateHtml = `
-        <div class="bento-empty">
-          <div class="bento-empty-desc">${esc(c.sub)}</div>
-          ${
-            !isComposerOpen
-              ? `<button type="button" class="bento-empty-add-btn" data-toggle-card-add="${c.id}">+ Add plan</button>`
-              : ''
-          }
-        </div>
-      `;
+    const tilesHtml = visibleClusters.length
+      ? visibleClusters
+          .map((c) => {
+            const items = getClusterDisplayItems(c.id);
+            const activeCount = items.filter((r) => !r.completed).length;
+            const totalClusterActive = getClusterTotalActiveCount(c.id);
+            const hiddenOtherDatesCount =
+              selDate !== 'all' ? Math.max(0, totalClusterActive - activeCount) : 0;
+            const isComposerOpen = state.activeInlineClusterId === c.id;
+            const tileCls = ['bento-tile', isComposerOpen ? 'has-open-composer' : '']
+              .filter(Boolean)
+              .join(' ');
 
-      const composerHtml = isComposerOpen
-        ? `
-          <div class="bento-card-composer">
-            <form class="bento-inline-form" data-inline-cluster-form="${c.id}">
-              <input
-                type="text"
-                class="bento-inline-input"
-                enterkeyhint="done"
-                name="inlineTitle"
-                data-card-inline-input="${c.id}"
-                placeholder="Add plan to ${esc(c.shortLabel)}… (Enter to save)"
-                autocomplete="off"
-              >
-              <button type="submit" class="bento-inline-btn">Add</button>
-              <button type="button" class="bento-inline-btn ghost" data-card-open-details="${c.id}" title="Open full composer with date, time & checklist">Details</button>
-              <button type="button" class="bento-inline-btn ghost" data-close-card-add="${c.id}" aria-label="Close" style="padding:0 7px">✕</button>
-            </form>
-          </div>
-        `
-        : '';
+            const topRows = items.slice(0, maxPreviewRows).map((it) => {
+              const isChecked = Boolean(it.completed);
+              const t = Number(it.matureAt || it.dueAt || 0);
+              const isReady = !isChecked && isReadyNowItem(it, now);
+              const steps = Array.isArray(it.checklist) ? it.checklist : [];
+              const doneSteps = steps.filter((s) => s.done).length;
+              const buMeta = BHFIRMS_BUS.find((b) => b.id === it.buId);
+              const rIso = itemIsoDate(it);
+              const priDot =
+                !isChecked && it.priority === 'p1'
+                  ? `<span style="width:6px;height:6px;border-radius:50%;background:var(--crimson);flex-shrink:0" title="P1 Critical"></span>`
+                  : !isChecked && it.priority === 'p2'
+                    ? `<span style="width:6px;height:6px;border-radius:50%;background:var(--amber);flex-shrink:0" title="P2 High"></span>`
+                    : '';
 
-      const svgIcon = CLUSTER_SVGS[c.id] || c.icon;
+              let tagTxt = '';
+              let tagCls = '';
+              if (isChecked) {
+                tagTxt = '✓ Done';
+                tagCls = 'matured';
+              } else if (it.delegationStatus === 'done') {
+                tagTxt = 'Verify';
+                tagCls = 'matured';
+              } else if (isReady) {
+                tagTxt = 'Ready';
+                tagCls = 'matured';
+              } else if (it.assigneeName) {
+                tagTxt = it.assigneeName;
+                tagCls = 'person';
+              } else if (steps.length > 0) {
+                tagTxt = `${doneSteps}/${steps.length}`;
+              } else if (t > now) {
+                tagTxt = formatCountdown(t, now);
+                tagCls = 'timer';
+              } else if (rIso && rIso > baseIso) {
+                tagTxt = rIso === shiftIsoDate(baseIso, 1) ? 'Tomorrow' : formatIsoFriendly(rIso, false);
+              } else if (buMeta) {
+                tagTxt = buMeta.short;
+              }
 
-      return `
-        <div class="${tileCls}" data-cluster-id="${c.id}">
-          <div class="bento-head">
-            <div class="bento-title-wrap" data-open-cluster="${c.id}" title="View all ${esc(c.label)} items">
-              <span class="bento-icon">${svgIcon}</span>
-              <div class="bento-title">${esc(isMobileViewport ? c.shortLabel : c.label)}</div>
-            </div>
-            <div class="bento-count-wrap">
-              <span class="bento-count ${activeCount ? 'active' : ''} tabular">${activeCount}</span>
-              <button
-                type="button"
-                class="bento-add-icon-btn ${isComposerOpen ? 'is-open' : ''}"
-                data-toggle-card-add="${c.id}"
-                title="Add plan to ${esc(c.label)}"
-                aria-label="Add plan to ${esc(c.label)}"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-              </button>
-            </div>
-          </div>
+              return `
+                <div class="bento-micro-row ${isChecked ? 'is-checked' : ''}" data-open-workbench="${esc(it.id)}" title="Tap circle to complete or tap title to edit">
+                  <button
+                    type="button"
+                    class="bento-micro-check ${isChecked ? 'checked' : ''}"
+                    data-act="toggle-done"
+                    data-id="${esc(it.id)}"
+                    title="${isChecked ? 'Undo complete' : 'Complete'}"
+                  >✓</button>
+                  ${priDot}
+                  <span class="bento-micro-text">${esc(it.title)}</span>
+                  ${
+                    tagTxt
+                      ? `<span class="bento-micro-tag ${tagCls} tabular">${esc(tagTxt)}</span>`
+                      : ''
+                  }
+                </div>
+              `;
+            });
 
-          <div class="bento-items">
-            ${topRows.length ? topRows.join('') : emptyStateHtml}
+            const composerHtml = isComposerOpen
+              ? `
+                <div class="bento-card-composer">
+                  <form class="bento-inline-form" data-inline-cluster-form="${c.id}">
+                    <input
+                      type="text"
+                      class="bento-inline-input"
+                      enterkeyhint="done"
+                      name="inlineTitle"
+                      data-card-inline-input="${c.id}"
+                      placeholder="Add plan to ${esc(c.shortLabel)}… (Enter to save)"
+                      autocomplete="off"
+                    >
+                    <button type="submit" class="bento-inline-btn">Add</button>
+                    <button type="button" class="bento-inline-btn ghost" data-card-open-details="${c.id}" title="Open full composer with date, time & checklist">Details</button>
+                    <button type="button" class="bento-inline-btn ghost" data-close-card-add="${c.id}" aria-label="Close" style="padding:0 7px">✕</button>
+                  </form>
+                </div>
+              `
+              : '';
+
+            const svgIcon = CLUSTER_SVGS[c.id] || c.icon;
+            const countBadgeLabel =
+              hiddenOtherDatesCount > 0 ? `${activeCount} / ${totalClusterActive}` : `${activeCount}`;
+
+            return `
+              <div class="${tileCls}" data-cluster-id="${c.id}">
+                <div class="bento-head">
+                  <div class="bento-title-wrap" data-open-cluster="${c.id}" title="View all ${esc(c.label)} items">
+                    <span class="bento-icon">${svgIcon}</span>
+                    <div class="bento-title">${esc(isMobileViewport ? c.shortLabel : c.label)}</div>
+                  </div>
+                  <div class="bento-count-wrap">
+                    <span class="bento-count ${activeCount ? 'active' : ''} tabular">${countBadgeLabel}</span>
+                    <button
+                      type="button"
+                      class="bento-add-icon-btn ${isComposerOpen ? 'is-open' : ''}"
+                      data-toggle-card-add="${c.id}"
+                      title="Add plan to ${esc(c.label)}"
+                      aria-label="Add plan to ${esc(c.label)}"
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="bento-items">
+                  ${topRows.join('')}
+                  ${
+                    items.length > maxPreviewRows
+                      ? `<button type="button" class="mini-chip" data-open-cluster="${c.id}" style="align-self:flex-start;font-size:10.5px;margin-top:4px">+${items.length - maxPreviewRows} more →</button>`
+                      : ''
+                  }
+                  ${
+                    hiddenOtherDatesCount > 0
+                      ? `<button type="button" class="bento-other-dates-hint" data-plan-date="all">
+                          <span>+${hiddenOtherDatesCount} more on other dates</span>
+                          <span>Show all ${totalClusterActive} →</span>
+                        </button>`
+                      : ''
+                  }
+                </div>
+
+                ${composerHtml}
+              </div>
+            `;
+          })
+          .join('')
+      : `<div class="bento-tile" style="padding:26px 16px;align-items:center;text-align:center;gap:10px">
+          <div style="font-size:13.5px;font-weight:600;color:var(--text-secondary)">
             ${
-              items.length > maxPreviewRows
-                ? `<button type="button" class="mini-chip" data-open-cluster="${c.id}" style="align-self:flex-start;font-size:10.5px;margin-top:4px">+${items.length - maxPreviewRows} more →</button>`
-                : ''
+              selDate !== 'all'
+                ? `No plans scheduled for ${esc(formatIsoFriendly(selDate, true))}`
+                : 'No active plans right now'
             }
           </div>
-
-          ${composerHtml}
-        </div>
-      `;
-    }).join('');
+          <div style="display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap">
+            ${
+              selDate !== 'all' && allActive.length > 0
+                ? `<button type="button" class="mini-chip active" data-plan-date="all">Show All Active Plans (${allActive.length})</button>`
+                : ''
+            }
+            <button type="button" class="bento-inline-btn" data-open-new-plan="1">+ New Plan</button>
+          </div>
+        </div>`;
 
     root.innerHTML = `
       ${weekStripHtml}
       ${activeDateBarHtml}
       ${toolbarHtml}
-      <div class="bento-radar-grid">
+      <div class="bento-radar-grid" data-tile-count="${Math.max(1, visibleClusters.length)}">
         ${tilesHtml}
       </div>
       ${buildCompletedArchiveSectionHtml(completed, now)}
@@ -5400,20 +5579,19 @@
     const recurList = active.filter((r) => r.recur && r.recur !== 'none');
     const ideasList = active.filter((r) => r.category === 'ideas' || r.category === 'want_to_do' || r.kind === 'parked');
 
-    const filters = [
-      { id: 'all', lbl: `All Active (${active.length})` },
-      { id: 'done', lbl: `✓ Completed (${completed.length})` },
-      { id: 'ready', lbl: `Ready Now (${readyList.length})` },
-      { id: 'action', lbl: `Action Tasks (${actionList.length})` },
-      { id: 'timers', lbl: `Wait Timers (${timerList.length})` },
-      { id: 'verify', lbl: `Verify / App (${verifyList.length})` },
-      { id: 'shipping', lbl: `Shipping (${shippingList.length})` },
-      { id: 'payments', lbl: `Payment Holds (${paymentList.length})` },
-      { id: 'recurring', lbl: `Recurring (${recurList.length})` },
-      { id: 'ideas', lbl: `Ideas & Parked (${ideasList.length})` }
-    ];
-
     const fId = state.taskFilter || 'all';
+    const filters = [
+      { id: 'all', lbl: `All Active (${active.length})`, count: active.length, always: true },
+      { id: 'done', lbl: `✓ Completed (${completed.length})`, count: completed.length, always: true },
+      { id: 'ready', lbl: `Ready Now (${readyList.length})`, count: readyList.length, always: false },
+      { id: 'action', lbl: `Action Tasks (${actionList.length})`, count: actionList.length, always: false },
+      { id: 'timers', lbl: `Wait Timers (${timerList.length})`, count: timerList.length, always: false },
+      { id: 'verify', lbl: `Verify / App (${verifyList.length})`, count: verifyList.length, always: false },
+      { id: 'shipping', lbl: `Shipping (${shippingList.length})`, count: shippingList.length, always: false },
+      { id: 'payments', lbl: `Payment Holds (${paymentList.length})`, count: paymentList.length, always: false },
+      { id: 'recurring', lbl: `Recurring (${recurList.length})`, count: recurList.length, always: false },
+      { id: 'ideas', lbl: `Ideas & Parked (${ideasList.length})`, count: ideasList.length, always: false }
+    ].filter((f) => f.always || f.count > 0 || f.id === fId);
     let contentHtml = '';
 
     if (fId === 'all') {
@@ -5626,10 +5804,11 @@
     const isPhoneStudio = typeof window !== 'undefined' && window.innerWidth <= 680;
     const showStudioExtras = !isPhoneStudio || Boolean(state.delStudioMoreOpen);
 
+    const freqBus = getBusByFrequency();
     const buSelectHtml = `
       <select id="del-studio-bu" class="del-composer-select">
         <option value="">Unit (Auto)</option>
-        ${BHFIRMS_BUS.map(
+        ${freqBus.map(
           (b) => `<option value="${b.id}" ${selectedStudioBu === b.id ? 'selected' : ''}>${esc(b.short)}</option>`
         ).join('')}
       </select>
@@ -5776,13 +5955,17 @@
           <button type="button" class="filter-pill ${state.delegatedBuFilter === 'all' ? 'active' : ''}" data-del-bu="all">
             All BUs (${delegated.length})
           </button>
-          ${BHFIRMS_BUS.map(
-            (b) => `
-            <button type="button" class="filter-pill ${state.delegatedBuFilter === b.id ? 'active' : ''}" data-del-bu="${b.id}">
-              ${esc(b.short)}
-            </button>
-          `
-          ).join('')}
+          ${freqBus
+            .map((b) => {
+              const cnt = delegated.filter((r) => r.buId === b.id).length;
+              if (cnt === 0 && state.delegatedBuFilter !== b.id) return '';
+              return `
+                <button type="button" class="filter-pill ${state.delegatedBuFilter === b.id ? 'active' : ''}" data-del-bu="${b.id}">
+                  ${esc(b.short)} (${cnt})
+                </button>
+              `;
+            })
+            .join('')}
         </div>
       </div>
     `;
@@ -5841,33 +6024,35 @@
         }
       ];
 
-      const colsHtml = stages
-        .map(
-          (st) => `
-        <div class="del-stage-col ${st.items.length === 0 ? 'is-empty-stage' : ''}">
-          <div class="del-stage-head">
-            <div>
-              <div class="del-stage-title">${esc(st.title)}</div>
-              <div style="font-size:10px;color:var(--text-muted)">${esc(st.sub)}</div>
+      const visibleStages = stages.filter((st) => st.items.length > 0);
+      const colsHtml = visibleStages.length
+        ? visibleStages
+            .map(
+              (st) => `
+            <div class="del-stage-col">
+              <div class="del-stage-head">
+                <div>
+                  <div class="del-stage-title">${esc(st.title)}</div>
+                  <div style="font-size:10px;color:var(--text-muted)">${esc(st.sub)}</div>
+                </div>
+                <span class="bento-count active tabular">${st.items.length}</span>
+              </div>
+              <div class="del-stage-body">
+                ${st.items.map((it) => renderDelegatedCardHtml(it, now)).join('')}
+              </div>
             </div>
-            <span class="bento-count ${st.items.length ? 'active' : ''} tabular">${st.items.length}</span>
-          </div>
-          <div class="del-stage-body">
-            ${
-              st.items.length
-                ? st.items.map((it) => renderDelegatedCardHtml(it, now)).join('')
-                : `<div style="padding:18px 10px;text-align:center;color:var(--text-muted);font-size:11px;border:1px dashed var(--border-subtle);border-radius:7px">No tasks in this stage</div>`
-            }
-          </div>
-        </div>
-      `
-        )
-        .join('');
+          `
+            )
+            .join('')
+        : `<div class="del-stage-col" style="padding:24px 16px;align-items:center;text-align:center;gap:6px">
+            <div style="font-size:13px;font-weight:600;color:var(--text-secondary)">No active delegated tasks right now</div>
+            <div style="font-size:11.5px;color:var(--text-muted)">Assign a task above to track its 4-stage WhatsApp progress.</div>
+          </div>`;
 
       root.innerHTML = `
         ${composerDeckHtml}
         ${toolbarHtml}
-        <div class="del-pipeline-grid">
+        <div class="del-pipeline-grid" data-tile-count="${Math.max(1, visibleStages.length)}">
           ${colsHtml}
         </div>
       `;
@@ -6621,7 +6806,7 @@
 
           <div class="roster-form-grid-2">
             <select id="roster-bu" class="roster-field">
-              ${BHFIRMS_BUS.map(
+              ${getBusByFrequency().map(
                 (b) =>
                   `<option value="${b.id}" ${(editingMember?.bu || 'holding') === b.id ? 'selected' : ''}>${esc(
                     b.short
@@ -6940,7 +7125,7 @@
             }</span>
           </div>
           <div class="np-cat-grid">
-            ${CLUSTERS.map((c) => {
+            ${getClustersByFrequency().map((c) => {
               const svg = CLUSTER_SVGS[c.id] || '';
               return `
                 <button
@@ -7007,7 +7192,7 @@
                 <label class="np-sublabel" for="np-bu">Business Unit</label>
                 <select id="np-bu" class="np-input">
                   <option value="">Personal / General</option>
-                  ${BHFIRMS_BUS.map(
+                  ${getBusByFrequency().map(
                     (b) => `<option value="${b.id}" ${f.buId === b.id ? 'selected' : ''}>${esc(b.short)}</option>`
                   ).join('')}
                 </select>
@@ -7426,7 +7611,7 @@
           <div class="np-field-wrap">
             <label class="np-sublabel" for="wb-category-sel">Category</label>
             <select id="wb-cluster" class="np-input">
-              ${CLUSTERS.map(
+              ${getClustersByFrequency().map(
                 (c) => `<option value="${c.id}" ${item.category === c.id ? 'selected' : ''}>${esc(c.label)}</option>`
               ).join('')}
             </select>
@@ -7447,7 +7632,7 @@
             <label class="np-sublabel" for="wb-bu">Business Unit</label>
             <select id="wb-bu" class="np-input">
               <option value="">Personal / General</option>
-              ${BHFIRMS_BUS.map(
+              ${getBusByFrequency().map(
                 (b) => `<option value="${b.id}" ${item.buId === b.id ? 'selected' : ''}>${esc(b.short)}</option>`
               ).join('')}
             </select>
@@ -8254,6 +8439,14 @@
 
     document.getElementById('draft-when-select')?.addEventListener('change', (e) => {
       const val = e.target.value || 'auto';
+      if (val === 'all_dates') {
+        state.selectedPlanDate = '';
+        state.draft.whenSelect = 'auto';
+        e.target.value = 'auto';
+        renderLiveAdvisorDrawer();
+        renderPlanningView();
+        return;
+      }
       if (val === 'custom') {
         e.target.value = state.draft.whenSelect || 'auto';
         openNewPlanSheet({ fromDraft: true, whenMode: 'date', focusDate: true });
@@ -8433,7 +8626,11 @@
     const handleTabNavClick = (e) => {
       const btn = e.target.closest('[data-tab]');
       if (!btn) return;
-      state.activeTab = normalizeCommandTab(btn.getAttribute('data-tab'));
+      const nextTab = normalizeCommandTab(btn.getAttribute('data-tab'));
+      if (nextTab === 'planning' && state.activeTab === 'planning' && state.selectedPlanDate) {
+        state.selectedPlanDate = '';
+      }
+      state.activeTab = nextTab;
       if (state.activeTab === 'prayers') {
         markNotificationsChecked((n) => n && (n.openPrayer || n.tab === 'prayers'));
       } else if (state.activeTab === 'score') {
@@ -8869,7 +9066,12 @@
 
       const planModeBtn = e.target.closest('[data-planning-mode]');
       if (planModeBtn) {
-        state.planningMode = planModeBtn.getAttribute('data-planning-mode') || 'radar';
+        const nextMode = planModeBtn.getAttribute('data-planning-mode') || 'radar';
+        if (nextMode === 'radar' && state.planningMode === 'radar' && state.selectedPlanDate) {
+          state.selectedPlanDate = '';
+          renderLiveAdvisorDrawer();
+        }
+        state.planningMode = nextMode;
         renderPlanningView();
         return;
       }
@@ -9194,14 +9396,20 @@
           return;
         }
         if (act === 'move-cluster') {
-          const idx = CLUSTERS.findIndex((c) => c.id === item.category);
-          const next = CLUSTERS[(idx + 1) % CLUSTERS.length];
-          item.category = next.id;
+          state.clusterPickerRowId = state.clusterPickerRowId === item.id ? '' : item.id;
+          renderAll();
+          return;
+        }
+        if (act === 'set-cluster') {
+          const targetClusterId = actBtn.getAttribute('data-cluster') || 'work';
+          const chosen = CLUSTERS.find((c) => c.id === targetClusterId) || CLUSTERS[0];
+          item.category = chosen.id;
+          state.clusterPickerRowId = '';
           item.updatedAt = Date.now();
           saveLocalState();
           renderAll();
           syncAll().catch(() => {});
-          showToast(`Moved to ${next.shortLabel}`);
+          showToast(`Moved to ${chosen.shortLabel}`);
           return;
         }
         if (act === 'delete') {
@@ -9249,6 +9457,9 @@
           markNotificationsChecked((n) => n && n.taskId === rId);
         }
         state.expandedRowId = state.expandedRowId === rId ? '' : rId;
+        if (!state.expandedRowId) {
+          state.clusterPickerRowId = '';
+        }
         renderAll();
         return;
       }
@@ -10007,7 +10218,7 @@
         }
       });
       navigator.serviceWorker
-        .register('./sw.js?v=28', { updateViaCache: 'none' })
+        .register('./sw.js?v=30', { updateViaCache: 'none' })
         .then(async (reg) => {
           reg.update().catch(() => {});
           if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
