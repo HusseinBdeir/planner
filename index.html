@@ -9,13 +9,13 @@
   <meta name="apple-mobile-web-app-title" content="Planner">
   <meta name="description" content="Planner — Executive Planning, Horizon Agenda, BHFIRMS Delegation &amp; Accountability, Daily 100% Score &amp; Shia Prayer Times.">
   <title>Planner — Executive Planning, Delegation, Tasks, Score &amp; Prayer Times</title>
-  <link rel="manifest" href="manifest.json?v=23">
-  <link rel="icon" type="image/svg+xml" href="icon.svg?v=23">
-  <link rel="apple-touch-icon" href="icon-180.png?v=23">
+  <link rel="manifest" href="manifest.json?v=26">
+  <link rel="icon" type="image/svg+xml" href="icon.svg?v=26">
+  <link rel="apple-touch-icon" href="icon-180.png?v=26">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/command.css?v=23">
+  <link rel="stylesheet" href="css/command.css?v=26">
   <script id="pre">
     (() => {
       try {
@@ -40,7 +40,7 @@
     <!-- Architectural Rev 10 Top HUD Ribbon -->
     <header class="hud-ribbon" id="hud-ribbon">
       <div class="hud-left">
-        <img src="icon.svg?v=22" alt="Planner" class="hud-logo">
+        <img src="icon.svg?v=26" alt="Planner" class="hud-logo">
         <div class="hud-brand-copy">
           <div class="hud-brand-row">
             <span class="hud-brand-name">PLANNER</span>
@@ -48,7 +48,7 @@
           </div>
           <span class="brass-double-rule"></span>
         </div>
-        <button type="button" class="hud-score-pill" id="hud-score-btn" title="Open The Score (100-Point Executive Discipline Ledger)">
+        <button type="button" class="hud-score-pill" id="hud-score-btn" aria-label="Open The Score">
           <svg class="hud-shield-svg" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linejoin="round"><path d="M9 2L14.5 4.2V8.6C14.5 12.2 12.1 14.7 9 16C5.9 14.7 3.5 12.2 3.5 8.6V4.2L9 2Z"/><path d="M6.6 9.1L8.3 10.8L11.6 7.4" stroke-linecap="round"/></svg>
           <strong class="hud-score-val tabular" id="hud-score-val">50%</strong>
           <span class="hud-score-delta tabular" id="hud-score-delta">50% +0%</span>
@@ -85,20 +85,27 @@
       </nav>
 
       <div class="hud-right">
-        <button type="button" class="hud-prayer-pill" id="btn-prayer-hud" title="Open Shia Prayer Times (Fajr, Dohor, Maghrib) &amp; Location Alerts">
-          <span class="prayer-hud-icon" id="prayer-hud-icon">🕌</span>
+        <button type="button" class="hud-prayer-pill" id="btn-prayer-hud" aria-label="Open Prayer Times">
+          <span class="prayer-hud-icon" id="prayer-hud-icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M8 2c1.8 1.6 3 3.1 3 4.6v1.8h2v5.6H3V8.4h2V6.6C5 5.1 6.2 3.6 8 2z"/><path d="M6.6 14v-2.7a1.4 1.4 0 0 1 2.8 0V14" stroke-linecap="round"/></svg>
+          </span>
           <span class="prayer-hud-name" id="prayer-hud-name">Prayer</span>
           <strong class="prayer-hud-time tabular" id="prayer-hud-time">--:--</strong>
           <span class="prayer-hud-cd tabular" id="prayer-hud-cd"></span>
         </button>
-        <button type="button" class="hud-sync-pill" id="btn-sync-now" hidden title="Offline — tap to retry Cloud Relay sync">
+        <button type="button" class="hud-sync-pill" id="btn-sync-now" hidden aria-label="Offline — tap to retry sync">
           <span class="sync-dot warn" id="sync-dot"></span>
           <span id="sync-label">Offline</span>
         </button>
-        <button type="button" class="hud-icon-btn" id="btn-theme-toggle" title="Toggle Dark / Light Theme" aria-label="Toggle Theme">
+        <button type="button" class="hud-new-plan-btn" id="btn-open-new-plan">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+          <span class="new-plan-lbl-full">New Plan</span>
+          <span class="new-plan-lbl-short">Plan</span>
+        </button>
+        <button type="button" class="hud-icon-btn" id="btn-theme-toggle" aria-label="Toggle Theme">
           <svg viewBox="0 0 20 20"><path d="M10 3a7 7 0 1 0 7 7c0-.4-.04-.8-.1-1.2A5.5 5.5 0 0 1 11.2 3.1C10.8 3.04 10.4 3 10 3z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
         </button>
-        <button type="button" class="hud-icon-btn hud-notif-btn" id="btn-push-toggle" title="Notifications &amp; Lock-Screen Push Settings" aria-label="Notifications">
+        <button type="button" class="hud-icon-btn hud-notif-btn" id="btn-push-toggle" aria-label="Notifications">
           <svg viewBox="0 0 20 20"><path d="M10 2.5a5 5 0 0 0-5 5v2.8l-1.6 2.4a.6.6 0 0 0 .5.9h12.2a.6.6 0 0 0 .5-.9L15 10.3V7.5a5 5 0 0 0-5-5zm-1.8 13a1.8 1.8 0 0 0 3.6 0" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <span class="push-dot" id="push-dot" hidden></span>
           <span class="push-count-badge tabular" id="push-count-badge" hidden>0</span>
@@ -106,54 +113,72 @@
       </div>
     </header>
 
-    <!-- Pinned Executive Command, Planning & Delegation Bar -->
+    <!-- Streamlined Quick-Add Plan Bar -->
     <section class="capture-bar-wrap" id="capture-bar-wrap">
       <form class="capture-form" id="capture-form" autocomplete="off">
         <div class="capture-input-shell" id="capture-input-shell">
           <span class="capture-spark" aria-hidden="true">
-            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M9 3.5v11M3.5 9h11"/></svg>
+            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 3.5v11M3.5 9h11"/></svg>
           </span>
           <input
             type="text"
             id="capture-input"
             class="capture-input"
             enterkeyhint="done"
-            placeholder="Plan an objective, schedule a task, @Name to delegate, or set a $ hold / wait timer…"
+            placeholder="Add a plan… (press Enter to save, or click Details for date &amp; steps)"
           >
           <div class="capture-meta-controls">
-            <button type="button" class="capture-meta-pill" id="btn-draft-horizon" title="Set planning horizon (Today, Tomorrow, This Week, Wait Timer, Backlog)">
-              <span id="draft-horizon-label">Horizon: Auto</span>
-            </button>
-            <button type="button" class="capture-meta-pill" id="btn-draft-priority" title="Cycle priority (Normal, P2 High, P1 Critical)">
-              <span id="draft-priority-label">P3 Normal</span>
-            </button>
-            <div class="capture-delegate-group" id="capture-delegate-group">
-              <button type="button" class="capture-delegate-btn" id="btn-pick-assignee" title="Delegate task to a team member">
-                <svg class="del-btn-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="6" cy="5.2" r="2.2"/><path d="M2 13c0-2 1.8-3.5 4-3.5s4 1.5 4 3.5"/><path d="M12.5 5.5v4M10.5 7.5h4"/></svg>
-                <span id="capture-assignee-icon" hidden></span>
+            <div class="capture-delegate-group" id="capture-delegate-group" hidden>
+              <button type="button" class="capture-delegate-btn active" id="btn-pick-assignee">
                 <span id="capture-assignee-label">Delegate</span>
               </button>
-              <button type="button" class="capture-delegate-clear" id="btn-clear-assignee" title="Clear selected person" aria-label="Clear assignee" hidden>✕</button>
+              <button type="button" class="capture-delegate-clear" id="btn-clear-assignee" aria-label="Clear assignee">✕</button>
             </div>
+            <select id="draft-cluster-select" class="capture-select-pill" aria-label="Category">
+              <option value="" id="draft-cluster-auto-opt">Category: Auto</option>
+              <option value="work">Work &amp; BUs</option>
+              <option value="people">People &amp; Follow-Ups</option>
+              <option value="family">Family &amp; Home</option>
+              <option value="want_to_do">Want To Do</option>
+              <option value="payments">Payments &amp; Holds</option>
+              <option value="verify">Verify / App</option>
+              <option value="shipping">Shipping &amp; Orders</option>
+              <option value="ideas">Ideas for Later</option>
+            </select>
+            <select id="draft-when-select" class="capture-select-pill" aria-label="When">
+              <option value="auto" id="draft-when-auto-opt">When: Today</option>
+              <option value="today">Today</option>
+              <option value="tomorrow">Tomorrow</option>
+              <option value="week">This Week</option>
+              <option value="1d">Wait 24h</option>
+              <option value="5d">Wait 5 Days</option>
+              <option value="backlog">Someday</option>
+              <option value="custom">Pick Date &amp; Time…</option>
+            </select>
+            <button type="button" class="capture-details-btn" id="btn-draft-details" aria-label="Open full plan composer">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2.5 4.5h11M2.5 8h7M2.5 11.5h9"/><circle cx="12.5" cy="8" r="1.4"/></svg>
+              <span>Details</span>
+            </button>
           </div>
         </div>
-        <button type="submit" class="capture-submit-btn" id="capture-submit-btn">+ Add Plan</button>
+        <button type="submit" class="capture-submit-btn" id="capture-submit-btn">Add Plan</button>
       </form>
 
-      <!-- Collapsible Live Executive Planner & Classifier Drawer -->
+      <!-- Subtle 1-Line Smart Context Strip (Only shown when @Assignee or $Hold detected) -->
       <div class="live-advisor-drawer" id="live-advisor-drawer" hidden></div>
 
-      <!-- Compact 1-Tap Device Push Activation Banner (Only shown when this device has not armed Planner Push yet) -->
+      <!-- Compact Dismissible Device Push Banner -->
       <div class="planner-push-banner" id="planner-push-banner" hidden>
         <div class="planner-push-banner-copy">
           <svg class="push-banner-svg" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round"><path d="M9 2.2a4.5 4.5 0 0 0-4.5 4.5v2.5L3 11.4a.5.5 0 0 0 .4.8h11.2a.5.5 0 0 0 .4-.8l-1.5-2.2V6.7A4.5 4.5 0 0 0 9 2.2zm-1.6 12a1.6 1.6 0 0 0 3.2 0"/></svg>
-          <span><strong>Enable Planner Push on this device</strong> — lock-screen alerts for Prayer Times, Tasks, Wait Timers &amp; Staff Delegations</span>
+          <span><strong>Enable lock-screen alerts</strong> for Prayer Times, Reminders &amp; Delegations on this device</span>
         </div>
         <div class="planner-push-banner-actions">
-          <button type="button" class="planner-push-activate-btn" id="btn-banner-enable-push">Enable Push</button>
-          <button type="button" class="planner-push-center-btn" id="btn-banner-notif-center" title="Open Notification Control Center" aria-label="Notification Settings">
+          <button type="button" class="planner-push-activate-btn" id="btn-banner-enable-push">Enable</button>
+          <button type="button" class="planner-push-center-btn" id="btn-banner-notif-center" aria-label="Notification Settings">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="2.2"/><path d="M8 2v1.6M8 12.4V14M2 8h1.6M12.4 8H14M3.8 3.8l1.1 1.1M11.1 11.1l1.1 1.1M12.2 3.8l-1.1 1.1M4.9 11.1l-1.1 1.1" stroke-linecap="round"/></svg>
           </button>
+          <button type="button" class="planner-push-center-btn" id="btn-banner-dismiss-push" aria-label="Dismiss banner">✕</button>
         </div>
       </div>
     </section>
@@ -220,7 +245,7 @@
   <!-- Toast Stack -->
   <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
 
-  <script src="js/endpoints.js?v=23"></script>
-  <script src="js/app.js?v=23"></script>
+  <script src="js/endpoints.js?v=26"></script>
+  <script src="js/app.js?v=26"></script>
 </body>
 </html>

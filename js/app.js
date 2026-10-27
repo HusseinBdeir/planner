@@ -15,6 +15,14 @@
   const NOTIF_PREFS_KEY = 'theo_cmd_notif_prefs_v1';
   const NOTIF_INBOX_KEY = 'theo_cmd_notif_inbox_v1';
   const NOTIF_CHECKED_KEY = 'theo_cmd_notif_checked_v1';
+  const PUSH_BANNER_DISMISSED_KEY = 'theo_cmd_push_banner_dismissed_v1';
+
+  function isHeadlessQuarantine() {
+    return Boolean(
+      (typeof navigator !== 'undefined' && navigator.webdriver) ||
+        (typeof window !== 'undefined' && window.__PLANNER_HEADLESS_TEST)
+    );
+  }
 
   const DEFAULT_NOTIF_PREFS = {
     enabled: true,
@@ -296,12 +304,15 @@
     showInlineNewPerson: false,
     fastDelPersonId: '',
     expandedRowId: '',
+    activeInlineClusterId: '',
     openClusterSheetId: '',
     openTaskWorkbenchId: '',
-    openSheetKind: '', // '' | 'cluster' | 'roster' | 'notifications' | 'task'
+    openSheetKind: '', // '' | 'cluster' | 'roster' | 'notifications' | 'workbench' | 'new_plan'
+    newPlanForm: null,
     sheetOpenedWithUnreadIds: [],
     recentlyCompletedUntil: {},
     completedSectionOpen: false,
+    pushBannerDismissed: localStorage.getItem(PUSH_BANNER_DISMISSED_KEY) === '1',
     rosterSheetOpts: {
       pickForDraft: false,
       existingTaskId: '',
@@ -446,8 +457,15 @@
       rem.subGroup ||
       rem.customGroup ||
       (rem.assigneeName ? `@${rem.assigneeName}` : '');
+    const planDate =
+      typeof rem.planDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rem.planDate)
+        ? rem.planDate
+        : '';
+    const hasAlarm = Boolean(rem.hasAlarm);
     const isParkedIdea =
       (rem.category === 'ideas' || rem.category === 'want_to_do') &&
+      !planDate &&
+      !hasAlarm &&
       !rem.matureAt &&
       rem.kind !== 'wait' &&
       rem.horizon !== 'today' &&
@@ -463,6 +481,8 @@
       status: completed ? 'done' : 'open',
       priority,
       horizon,
+      planDate,
+      hasAlarm,
       notes: String(rem.notes || '').trim(),
       checklist,
       subTag,
@@ -1050,7 +1070,8 @@
       return CLUSTERS.find((c) => c.id === override) || CLUSTERS[0];
     }
     const s = String(text || '').toLowerCase();
-    // 1. Ideas for later & Want to do (unless explicitly @Person delegated)
+    const hasBu = Boolean(extractSmartContext(text).buId);
+    // 1. Ideas for later & Want to do (unless explicitly @Person delegated or BHFIRMS BU matched)
     if (
       !/^@[A-Za-z]/.test(text) &&
       /\b(idea|concept|maybe build|brainstorm|feature idea|automation idea|side project|someday|what if|prototype|experiment|for later)\b/i.test(s)
@@ -1058,6 +1079,7 @@
       return CLUSTERS.find((c) => c.id === 'ideas');
     }
     if (
+      !hasBu &&
       !/^@[A-Za-z]/.test(text) &&
       /\b(want to|wanna|bucket list|try out|visit|travel|trip|watch|read|buy for myself|weekend|hobby|learn|explore|plan to do|things to do|padel)\b/i.test(s)
     ) {
@@ -1098,131 +1120,8 @@
     return CLUSTERS.find((c) => c.id === 'work');
   }
 
-  function parseNaturalTiming(text = '', clusterId = 'work', amount = 0, horizonOverride = '') {
-    const s = String(text || '').toLowerCase();
-    const now = Date.now();
-
-    if (horizonOverride === 'today') {
-      const t = new Date(now);
-      t.setHours(18, 0, 0, 0);
-      if (t.getTime() <= now) t.setTime(now + 2 * 3600000);
-      return { targetAt: t.getTime(), label: 'Today', isHold: false, recur: 'none', horizon: 'today' };
-    }
-    if (horizonOverride === 'tomorrow') {
-      const t = new Date(now + 86400000);
-      t.setHours(10, 0, 0, 0);
-      return { targetAt: t.getTime(), label: 'Tomorrow 10:00', isHold: false, recur: 'none', horizon: 'tomorrow' };
-    }
-    if (horizonOverride === 'week') {
-      return { targetAt: now + 3 * 86400000, label: 'This Week (+3d)', isHold: false, recur: 'none', horizon: 'week' };
-    }
-    if (horizonOverride === 'backlog') {
-      return { targetAt: 0, label: 'Backlog (No Alarm)', isHold: false, recur: 'none', horizon: 'backlog' };
-    }
-
-    const minM = s.match(/\b(?:in|wait|for|after)\s+(\d{1,3})\s*(?:m|min|mins|minute|minutes)\b/);
-    if (minM) {
-      const m = Number(minM[1]);
-      return { targetAt: now + m * 60000, label: `In ${m}m`, isHold: true, recur: 'none', horizon: 'today' };
-    }
-    const hrM = s.match(/\b(?:in|wait|for|after)\s+(\d{1,3})\s*(?:h|hr|hrs|hour|hours)\b/);
-    if (hrM) {
-      const h = Number(hrM[1]);
-      return { targetAt: now + h * 3600000, label: `In ${h}h`, isHold: true, recur: 'none', horizon: h <= 12 ? 'today' : 'tomorrow' };
-    }
-    const dayM = s.match(/\b(?:in|wait|for|after|shipping|delivery|takes?)\s+(\d{1,3})\s*(?:d|day|days)\b/);
-    if (dayM) {
-      const d = Number(dayM[1]);
-      return { targetAt: now + d * 86400000, label: `${d}d Timer`, isHold: true, recur: 'none', horizon: d <= 1 ? 'tomorrow' : 'week' };
-    }
-    if (/\b(today)\b/.test(s)) {
-      const t = new Date(now);
-      t.setHours(18, 0, 0, 0);
-      if (t.getTime() <= now) t.setTime(now + 2 * 3600000);
-      return { targetAt: t.getTime(), label: 'Today', isHold: false, recur: 'none', horizon: 'today' };
-    }
-    if (/\b(tonight|this evening)\b/.test(s)) {
-      const t = new Date();
-      t.setHours(20, 0, 0, 0);
-      if (t.getTime() <= now) t.setTime(now + 2 * 3600000);
-      return { targetAt: t.getTime(), label: 'Tonight 20:00', isHold: false, recur: 'none', horizon: 'today' };
-    }
-    if (/\b(tomorrow)\b/.test(s)) {
-      const t = new Date(now + 86400000);
-      const hrMatch = s.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/);
-      if (hrMatch) {
-        let hr = Number(hrMatch[1]);
-        const mn = Number(hrMatch[2] || 0);
-        if (hrMatch[3] === 'pm' && hr < 12) hr += 12;
-        if (hrMatch[3] === 'am' && hr === 12) hr = 0;
-        t.setHours(hr, mn, 0, 0);
-      } else {
-        t.setHours(10, 0, 0, 0);
-      }
-      return { targetAt: t.getTime(), label: 'Tomorrow', isHold: false, recur: 'none', horizon: 'tomorrow' };
-    }
-    if (/\b(next week|this week)\b/.test(s)) {
-      return { targetAt: now + 5 * 86400000, label: 'This Week', isHold: true, recur: 'none', horizon: 'week' };
-    }
-    if (clusterId === 'ideas' || clusterId === 'want_to_do') {
-      return { targetAt: 0, label: 'Backlog (No Alarm)', isHold: false, recur: 'none', horizon: 'backlog' };
-    }
-    if (/\b(every day|daily)\b/.test(s)) {
-      return { targetAt: now + 86400000, label: 'Daily', isHold: false, recur: 'daily', horizon: 'today' };
-    }
-    if (/\b(every week|weekly)\b/.test(s)) {
-      return { targetAt: now + 7 * 86400000, label: 'Weekly', isHold: false, recur: 'weekly', horizon: 'week' };
-    }
-    if (clusterId === 'verify') {
-      return { targetAt: now + 24 * 3600000, label: '24h Verify Wait', isHold: true, recur: 'none', horizon: 'tomorrow' };
-    }
-    if (clusterId === 'shipping') {
-      return { targetAt: now + 5 * 86400000, label: '5d Shipping Timer', isHold: true, recur: 'none', horizon: 'week' };
-    }
-    if (clusterId === 'payments') {
-      const days = amount >= 15000 ? 10 : amount >= 5000 ? 7 : amount >= 1000 ? 4 : 2;
-      return { targetAt: now + days * 86400000, label: `${days}d Payment Hold`, isHold: true, recur: 'none', horizon: 'week' };
-    }
-    if (clusterId === 'family') {
-      const t = new Date();
-      t.setHours(20, 0, 0, 0);
-      if (t.getTime() <= now) t.setTime(now + 12 * 3600000);
-      return { targetAt: t.getTime(), label: 'Evening 20:00', isHold: false, recur: 'none', horizon: 'today' };
-    }
-    return { targetAt: now + 24 * 3600000, label: '+24h Follow-Up', isHold: false, recur: 'none', horizon: 'today' };
-  }
-
-  function resolveTimingFromChoice(choice, text, clusterId, amount, horizonOverride = '') {
-    const now = Date.now();
-    if (choice === 'park') return { targetAt: 0, label: 'Backlog (No Alarm)', isHold: false, horizon: 'backlog' };
-    if (choice === 'today') {
-      const t = new Date(now);
-      t.setHours(18, 0, 0, 0);
-      if (t.getTime() <= now) t.setTime(now + 2 * 3600000);
-      return { targetAt: t.getTime(), label: 'Today 18:00', isHold: false, horizon: 'today' };
-    }
-    if (choice === '3h') return { targetAt: now + 3 * 3600000, label: 'In 3h', isHold: true, horizon: 'today' };
-    if (choice === 'tonight') {
-      const t = new Date();
-      t.setHours(20, 30, 0, 0);
-      if (t.getTime() <= now) t.setTime(now + 3 * 3600000);
-      return { targetAt: t.getTime(), label: 'Tonight 20:30', isHold: false, horizon: 'today' };
-    }
-    if (choice === 'tomorrow') {
-      const t = new Date(now + 86400000);
-      t.setHours(10, 0, 0, 0);
-      return { targetAt: t.getTime(), label: 'Tomorrow 10:00', isHold: false, horizon: 'tomorrow' };
-    }
-    if (choice === '1d') return { targetAt: now + 24 * 3600000, label: '+24h', isHold: true, horizon: 'tomorrow' };
-    if (choice === '2d') return { targetAt: now + 2 * 86400000, label: '2d Wait', isHold: true, horizon: 'week' };
-    if (choice === '4d') return { targetAt: now + 4 * 86400000, label: '4d Wait', isHold: true, horizon: 'week' };
-    if (choice === '5d') return { targetAt: now + 5 * 86400000, label: '5d Shipping', isHold: true, horizon: 'week' };
-    if (choice === '7d') return { targetAt: now + 7 * 86400000, label: '7d Wait', isHold: true, horizon: 'week' };
-    return parseNaturalTiming(text, clusterId, amount, horizonOverride);
-  }
-
-  function itemIsoDate(item) {
-    const t = Number(item?.matureAt || item?.dueAt || 0);
+  function epochToIsoLocal(ms) {
+    const t = Number(ms || 0);
     if (!t) return '';
     const d = new Date(t);
     const y = d.getFullYear();
@@ -1231,26 +1130,323 @@
     return `${y}-${m}-${day}`;
   }
 
+  function formatIsoFriendly(iso, includeWeekday = true) {
+    if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return '';
+    const tIso = todayIso();
+    const tomIso = shiftIsoDate(tIso, 1);
+    const [yy, mm, dd] = iso.split('-').map(Number);
+    const dObj = new Date(yy, (mm || 1) - 1, dd || 1, 12, 0, 0);
+    const shortMd = dObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    if (iso === tIso) return `Today, ${shortMd}`;
+    if (iso === tomIso) return `Tomorrow, ${shortMd}`;
+    if (!includeWeekday) return shortMd;
+    const wk = dObj.toLocaleDateString('en-US', { weekday: 'short' });
+    return `${wk}, ${shortMd}`;
+  }
+
+  function horizonFromIso(iso) {
+    if (!iso) return 'backlog';
+    const tIso = todayIso();
+    const tomIso = shiftIsoDate(tIso, 1);
+    if (iso <= tIso) return 'today';
+    if (iso === tomIso) return 'tomorrow';
+    return 'week';
+  }
+
+  function isHoldOrTimerCategory(cat) {
+    return cat === 'verify' || cat === 'shipping' || cat === 'payments';
+  }
+
+  function isHoldOrTimerRecord(r) {
+    if (!r) return false;
+    return Boolean(
+      Number(r.matureAt || 0) > 0 ||
+        r.kind === 'wait' ||
+        r.kind === 'payment' ||
+        isHoldOrTimerCategory(r.category)
+    );
+  }
+
+  function parseExplicitClockTime(text = '') {
+    const s = String(text || '').toLowerCase();
+    const ampm = s.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/);
+    if (ampm) {
+      let hr = Number(ampm[1]);
+      const mn = Number(ampm[2] || 0);
+      if (ampm[3] === 'pm' && hr < 12) hr += 12;
+      if (ampm[3] === 'am' && hr === 12) hr = 0;
+      if (hr >= 0 && hr <= 23 && mn >= 0 && mn <= 59) return { hr, mn };
+    }
+    const at24 = s.match(/\b(?:at|@)\s*(\d{1,2}):(\d{2})\b/);
+    if (at24) {
+      const hr = Number(at24[1]);
+      const mn = Number(at24[2]);
+      if (hr >= 0 && hr <= 23 && mn >= 0 && mn <= 59) return { hr, mn };
+    }
+    return null;
+  }
+
+  function parseNaturalTiming(text = '', clusterId = 'work', amount = 0, horizonOverride = '') {
+    const s = String(text || '').toLowerCase();
+    const now = Date.now();
+    const tIso = todayIso();
+    const tomIso = shiftIsoDate(tIso, 1);
+    const explicitClock = parseExplicitClockTime(text);
+
+    // 1. Explicit relative countdowns ("in 30m", "in 3h", "in 5 days")
+    const minM = s.match(/\b(?:in|wait|for|after)\s+(\d{1,3})\s*(?:m|min|mins|minute|minutes)\b/);
+    if (minM) {
+      const m = Number(minM[1]);
+      const targetAt = now + m * 60000;
+      return { targetAt, planDate: epochToIsoLocal(targetAt), hasAlarm: true, label: `In ${m}m`, isHold: true, recur: 'none', horizon: 'today' };
+    }
+    const hrM = s.match(/\b(?:in|wait|for|after)\s+(\d{1,3})\s*(?:h|hr|hrs|hour|hours)\b/);
+    if (hrM) {
+      const h = Number(hrM[1]);
+      const targetAt = now + h * 3600000;
+      return { targetAt, planDate: epochToIsoLocal(targetAt), hasAlarm: true, label: `In ${h}h`, isHold: true, recur: 'none', horizon: h <= 12 ? 'today' : 'tomorrow' };
+    }
+    const dayM = s.match(/\b(?:in|wait|for|after|shipping|delivery|takes?)\s+(\d{1,3})\s*(?:d|day|days)\b/);
+    if (dayM) {
+      const d = Number(dayM[1]);
+      const targetAt = now + d * 86400000;
+      return { targetAt, planDate: epochToIsoLocal(targetAt), hasAlarm: true, label: `${d}d Timer`, isHold: true, recur: 'none', horizon: d <= 1 ? 'tomorrow' : 'week' };
+    }
+
+    // 2. Recurring keywords
+    if (/\b(every day|daily)\b/.test(s)) {
+      const targetAt = now + 86400000;
+      return { targetAt, planDate: tIso, hasAlarm: true, label: 'Daily', isHold: false, recur: 'daily', horizon: 'today' };
+    }
+    if (/\b(every week|weekly)\b/.test(s)) {
+      const targetAt = now + 7 * 86400000;
+      return { targetAt, planDate: epochToIsoLocal(targetAt), hasAlarm: true, label: 'Weekly', isHold: false, recur: 'weekly', horizon: 'week' };
+    }
+
+    // 3. Explicit horizon overrides from UI controls
+    if (horizonOverride === 'backlog') {
+      return { targetAt: 0, planDate: '', hasAlarm: false, label: 'Someday', isHold: false, recur: 'none', horizon: 'backlog' };
+    }
+    if (horizonOverride === 'today' || horizonOverride === 'tomorrow' || horizonOverride === 'week') {
+      const baseDate =
+        horizonOverride === 'today'
+          ? tIso
+          : horizonOverride === 'tomorrow'
+            ? tomIso
+            : shiftIsoDate(tIso, 3);
+      if (explicitClock) {
+        const [yy, mm, dd] = baseDate.split('-').map(Number);
+        const dt = new Date(yy, mm - 1, dd, explicitClock.hr, explicitClock.mn, 0, 0);
+        return {
+          targetAt: dt.getTime(),
+          planDate: baseDate,
+          hasAlarm: true,
+          label: `${horizonOverride === 'today' ? 'Today' : horizonOverride === 'tomorrow' ? 'Tomorrow' : formatIsoFriendly(baseDate, false)} ${String(explicitClock.hr).padStart(2, '0')}:${String(explicitClock.mn).padStart(2, '0')}`,
+          isHold: false,
+          recur: 'none',
+          horizon: horizonOverride
+        };
+      }
+      if (isHoldOrTimerCategory(clusterId)) {
+        if (clusterId === 'verify') {
+          const targetAt = now + 24 * 3600000;
+          return { targetAt, planDate: epochToIsoLocal(targetAt), hasAlarm: true, label: '24h Verify Wait', isHold: true, recur: 'none', horizon: horizonOverride };
+        }
+        if (clusterId === 'shipping') {
+          const targetAt = now + 5 * 86400000;
+          return { targetAt, planDate: epochToIsoLocal(targetAt), hasAlarm: true, label: '5d Shipping Timer', isHold: true, recur: 'none', horizon: 'week' };
+        }
+        if (clusterId === 'payments') {
+          const days = amount >= 15000 ? 10 : amount >= 5000 ? 7 : amount >= 1000 ? 4 : 2;
+          const targetAt = now + days * 86400000;
+          return { targetAt, planDate: epochToIsoLocal(targetAt), hasAlarm: true, label: `${days}d Payment Hold`, isHold: true, recur: 'none', horizon: 'week' };
+        }
+      }
+      return {
+        targetAt: 0,
+        planDate: baseDate,
+        hasAlarm: false,
+        label: horizonOverride === 'today' ? 'Today' : horizonOverride === 'tomorrow' ? 'Tomorrow' : 'This Week',
+        isHold: false,
+        recur: 'none',
+        horizon: horizonOverride
+      };
+    }
+
+    // 4. Natural timing words in text
+    if (/\b(tonight|this evening)\b/.test(s)) {
+      const t = new Date();
+      t.setHours(explicitClock ? explicitClock.hr : 20, explicitClock ? explicitClock.mn : 0, 0, 0);
+      if (t.getTime() <= now) t.setTime(now + 2 * 3600000);
+      return { targetAt: t.getTime(), planDate: epochToIsoLocal(t.getTime()), hasAlarm: true, label: 'Tonight 20:00', isHold: false, recur: 'none', horizon: 'today' };
+    }
+    if (/\b(tomorrow)\b/.test(s)) {
+      if (explicitClock) {
+        const [yy, mm, dd] = tomIso.split('-').map(Number);
+        const dt = new Date(yy, mm - 1, dd, explicitClock.hr, explicitClock.mn, 0, 0);
+        return { targetAt: dt.getTime(), planDate: tomIso, hasAlarm: true, label: `Tomorrow ${String(explicitClock.hr).padStart(2, '0')}:${String(explicitClock.mn).padStart(2, '0')}`, isHold: false, recur: 'none', horizon: 'tomorrow' };
+      }
+      return { targetAt: 0, planDate: tomIso, hasAlarm: false, label: 'Tomorrow', isHold: false, recur: 'none', horizon: 'tomorrow' };
+    }
+    if (/\b(next week|this week)\b/.test(s)) {
+      const wkIso = shiftIsoDate(tIso, 3);
+      return { targetAt: 0, planDate: wkIso, hasAlarm: false, label: 'This Week', isHold: false, recur: 'none', horizon: 'week' };
+    }
+    if (explicitClock) {
+      const [yy, mm, dd] = tIso.split('-').map(Number);
+      const dt = new Date(yy, mm - 1, dd, explicitClock.hr, explicitClock.mn, 0, 0);
+      if (dt.getTime() <= now) dt.setDate(dt.getDate() + 1);
+      const pIso = epochToIsoLocal(dt.getTime());
+      return { targetAt: dt.getTime(), planDate: pIso, hasAlarm: true, label: `${pIso === tIso ? 'Today' : 'Tomorrow'} ${String(explicitClock.hr).padStart(2, '0')}:${String(explicitClock.mn).padStart(2, '0')}`, isHold: false, recur: 'none', horizon: horizonFromIso(pIso) };
+    }
+
+    // 5. Category defaults
+    if (clusterId === 'ideas' || clusterId === 'want_to_do') {
+      return { targetAt: 0, planDate: '', hasAlarm: false, label: 'Someday', isHold: false, recur: 'none', horizon: 'backlog' };
+    }
+    if (clusterId === 'verify') {
+      const targetAt = now + 24 * 3600000;
+      return { targetAt, planDate: epochToIsoLocal(targetAt), hasAlarm: true, label: '24h Verify Wait', isHold: true, recur: 'none', horizon: 'tomorrow' };
+    }
+    if (clusterId === 'shipping') {
+      const targetAt = now + 5 * 86400000;
+      return { targetAt, planDate: epochToIsoLocal(targetAt), hasAlarm: true, label: '5d Shipping Timer', isHold: true, recur: 'none', horizon: 'week' };
+    }
+    if (clusterId === 'payments') {
+      const days = amount >= 15000 ? 10 : amount >= 5000 ? 7 : amount >= 1000 ? 4 : 2;
+      const targetAt = now + days * 86400000;
+      return { targetAt, planDate: epochToIsoLocal(targetAt), hasAlarm: true, label: `${days}d Payment Hold`, isHold: true, recur: 'none', horizon: 'week' };
+    }
+
+    // Default ordinary plan: scheduled cleanly for Today (or active date) with zero fake overdue timer
+    const activeFilterIso =
+      state.selectedPlanDate && state.selectedPlanDate !== 'all' ? state.selectedPlanDate : tIso;
+    return {
+      targetAt: 0,
+      planDate: activeFilterIso,
+      hasAlarm: false,
+      label: activeFilterIso === tIso ? 'Today' : formatIsoFriendly(activeFilterIso, false),
+      isHold: false,
+      recur: 'none',
+      horizon: horizonFromIso(activeFilterIso)
+    };
+  }
+
+  function resolveTimingFromChoice(choice, text, clusterId, amount, horizonOverride = '') {
+    const now = Date.now();
+    const tIso = todayIso();
+    const tomIso = shiftIsoDate(tIso, 1);
+    if (choice === 'park' || choice === 'backlog') {
+      return { targetAt: 0, planDate: '', hasAlarm: false, label: 'Someday', isHold: false, horizon: 'backlog' };
+    }
+    if (choice === 'plan_today') {
+      return { targetAt: 0, planDate: tIso, hasAlarm: false, label: 'Today', isHold: false, horizon: 'today' };
+    }
+    if (choice === 'plan_tomorrow') {
+      return { targetAt: 0, planDate: tomIso, hasAlarm: false, label: 'Tomorrow', isHold: false, horizon: 'tomorrow' };
+    }
+    if (choice === 'plan_week') {
+      const wkIso = shiftIsoDate(tIso, 3);
+      return { targetAt: 0, planDate: wkIso, hasAlarm: false, label: 'This Week', isHold: false, horizon: 'week' };
+    }
+    if (choice && /^\d{4}-\d{2}-\d{2}$/.test(choice)) {
+      return {
+        targetAt: 0,
+        planDate: choice,
+        hasAlarm: false,
+        label: formatIsoFriendly(choice, false),
+        isHold: false,
+        horizon: horizonFromIso(choice)
+      };
+    }
+    if (choice === 'today') {
+      const t = new Date(now);
+      t.setHours(18, 0, 0, 0);
+      if (t.getTime() <= now) t.setTime(now + 2 * 3600000);
+      return { targetAt: t.getTime(), planDate: epochToIsoLocal(t.getTime()), hasAlarm: true, label: 'Today 18:00', isHold: false, horizon: 'today' };
+    }
+    if (choice === '3h') {
+      const targetAt = now + 3 * 3600000;
+      return { targetAt, planDate: epochToIsoLocal(targetAt), hasAlarm: true, label: 'In 3h', isHold: true, horizon: 'today' };
+    }
+    if (choice === 'tonight') {
+      const t = new Date();
+      t.setHours(20, 30, 0, 0);
+      if (t.getTime() <= now) t.setTime(now + 3 * 3600000);
+      return { targetAt: t.getTime(), planDate: epochToIsoLocal(t.getTime()), hasAlarm: true, label: 'Tonight 20:30', isHold: false, horizon: 'today' };
+    }
+    if (choice === 'tomorrow') {
+      const t = new Date(now + 86400000);
+      t.setHours(10, 0, 0, 0);
+      return { targetAt: t.getTime(), planDate: tomIso, hasAlarm: true, label: 'Tomorrow 10:00', isHold: false, horizon: 'tomorrow' };
+    }
+    if (choice === '1d') {
+      const targetAt = now + 24 * 3600000;
+      return { targetAt, planDate: epochToIsoLocal(targetAt), hasAlarm: true, label: '+24h Wait', isHold: true, horizon: 'tomorrow' };
+    }
+    if (choice === '2d') {
+      const targetAt = now + 2 * 86400000;
+      return { targetAt, planDate: epochToIsoLocal(targetAt), hasAlarm: true, label: '2d Wait', isHold: true, horizon: 'week' };
+    }
+    if (choice === '4d') {
+      const targetAt = now + 4 * 86400000;
+      return { targetAt, planDate: epochToIsoLocal(targetAt), hasAlarm: true, label: '4d Wait', isHold: true, horizon: 'week' };
+    }
+    if (choice === '5d') {
+      const targetAt = now + 5 * 86400000;
+      return { targetAt, planDate: epochToIsoLocal(targetAt), hasAlarm: true, label: '5d Shipping', isHold: true, horizon: 'week' };
+    }
+    if (choice === '7d') {
+      const targetAt = now + 7 * 86400000;
+      return { targetAt, planDate: epochToIsoLocal(targetAt), hasAlarm: true, label: '7d Wait', isHold: true, horizon: 'week' };
+    }
+    return parseNaturalTiming(text, clusterId, amount, horizonOverride);
+  }
+
+  function itemIsoDate(item) {
+    if (item?.planDate && /^\d{4}-\d{2}-\d{2}$/.test(item.planDate)) {
+      return item.planDate;
+    }
+    const t = Number(item?.matureAt || item?.dueAt || 0);
+    if (!t) return '';
+    return epochToIsoLocal(t);
+  }
+
   function getEffectiveHorizon(item, now = Date.now()) {
     if (!item) return 'backlog';
     const t = Number(item.matureAt || item.dueAt || 0);
-    if ((t > 0 && now >= t) || item.delegationStatus === 'done') return 'today';
+    if (item.delegationStatus === 'done') return 'today';
+    if (isHoldOrTimerRecord(item) && t > 0 && now >= t) return 'today';
+    if (item.planDate && /^\d{4}-\d{2}-\d{2}$/.test(item.planDate)) {
+      return horizonFromIso(item.planDate);
+    }
     if (item.horizon === 'today' || item.horizon === 'tomorrow' || item.horizon === 'week' || item.horizon === 'backlog') {
       return item.horizon;
     }
     if (item.priority === 'p1') return 'today';
     if (t > 0) {
-      const iso = itemIsoDate(item);
-      const tIso = todayIso();
-      const tomIso = shiftIsoDate(tIso, 1);
-      if (iso <= tIso) return 'today';
-      if (iso === tomIso) return 'tomorrow';
-      return 'week';
+      return horizonFromIso(epochToIsoLocal(t));
     }
     if (item.category === 'ideas' || item.category === 'want_to_do' || item.kind === 'parked') {
       return 'backlog';
     }
     return 'today';
+  }
+
+  function matchesPlanDateFilter(r, targetIso, now = Date.now()) {
+    if (!targetIso || targetIso === 'all') return true;
+    const baseIso = todayIso();
+    const tomorrowIso = shiftIsoDate(baseIso, 1);
+    const rIso = itemIsoDate(r);
+    if (rIso === targetIso) return true;
+    if (targetIso === baseIso) {
+      if (rIso && rIso < baseIso && getEffectiveHorizon(r, now) === 'today') return true;
+      if (!rIso && getEffectiveHorizon(r, now) === 'today') return true;
+    }
+    if (targetIso === tomorrowIso && !rIso && getEffectiveHorizon(r, now) === 'tomorrow') {
+      return true;
+    }
+    return false;
   }
 
   function formatCountdown(targetAt, now = Date.now()) {
@@ -1764,9 +1960,10 @@
     for (const item of state.reminders || []) {
       if (!item || !item.id || item.completed || item.deleted) continue;
 
-      // 1. Matured / Due Tasks & Wait Timers within the last 48h
+      // 1. Matured / Due Wait Timers & Explicit Alarms within the last 48h
       const targetAt = Number(item.matureAt || item.dueAt || 0);
-      if (targetAt > 0 && nowMs >= targetAt && nowMs - targetAt < 48 * 3600 * 1000) {
+      const isActionableDue = isHoldOrTimerRecord(item) || Boolean(item.hasAlarm);
+      if (isActionableDue && targetAt > 0 && nowMs >= targetAt && nowMs - targetAt < 48 * 3600 * 1000) {
         const alertKey = `due_${item.id}_${targetAt}`;
         const tag = `cmd-timer-${item.id}`;
         if (!checkedSet.has(alertKey) && !checkedSet.has(tag) && !existingIds.has(alertKey) && !existingIds.has(tag)) {
@@ -1966,7 +2163,7 @@
     const thisArmed = isThisDevicePushEnabled();
     const banner = document.getElementById('planner-push-banner');
     if (banner) {
-      banner.hidden = thisArmed;
+      banner.hidden = thisArmed || Boolean(state.pushBannerDismissed);
     }
     updateAppBadgeCount(false);
   }
@@ -2008,7 +2205,7 @@
   async function buildOwnerPushTargets(customExpSec = 0) {
     const subs = getAllActivePushSubscriptions();
     if (!subs.length) return [];
-    const expSec = customExpSec > 0 ? customExpSec : Math.floor(Date.now() / 1000) + 7 * 86400;
+    const expSec = customExpSec > 0 ? customExpSec : Math.floor(Date.now() / 1000) + 23 * 3600;
     const out = [];
     for (const sub of subs) {
       if (!sub || !sub.endpoint || !sub.keys?.p256dh || !sub.keys?.auth) continue;
@@ -2031,7 +2228,7 @@
     const sub = subs[0];
     if (!sub || !sub.endpoint || !sub.keys?.p256dh || !sub.keys?.auth) return null;
     try {
-      const expSec = customExpSec > 0 ? customExpSec : Math.floor(Date.now() / 1000) + 7 * 86400;
+      const expSec = customExpSec > 0 ? customExpSec : Math.floor(Date.now() / 1000) + 23 * 3600;
       const vapid = await signVapid(sub.endpoint, expSec);
       const bodyB64 = await encryptWebPush(sub.keys, {
         title,
@@ -2076,14 +2273,31 @@
     } catch {}
   }
 
-  function matchesArmedTimerSpec(storedId, specPrefix) {
-    if (typeof storedId !== 'string' || !storedId || !specPrefix) return false;
-    if (storedId === 'cancelled' || storedId.startsWith('fired_')) return false;
-    return storedId === specPrefix || storedId.startsWith(`${specPrefix}__`);
+  function hasValidArmedTimerExp(storedDoc, targetMs = 0) {
+    if (!targetMs) return true;
+    if (!storedDoc || typeof storedDoc !== 'object') return false;
+    const expSec = Number(storedDoc.expSec || 0);
+    const baseSec = Math.floor(Number(targetMs) / 1000);
+    if (!baseSec || !expSec) return false;
+    return expSec >= baseSec + 600 && expSec <= baseSec + 23 * 3600 + 1800;
+  }
+
+  function matchesArmedTimerSpec(storedIdOrDoc, specPrefix, targetMs = 0) {
+    const isDoc = storedIdOrDoc && typeof storedIdOrDoc === 'object';
+    const storedId = isDoc ? String(storedIdOrDoc.id || '') : String(storedIdOrDoc || '');
+    if (!storedId || !specPrefix) return false;
+    if (storedId === 'cancelled' || storedId.startsWith('fired_') || storedId.startsWith('failed_')) return false;
+    if (storedId.startsWith(`sending_${specPrefix}`)) return true;
+    const idOk = storedId === specPrefix || storedId.startsWith(`${specPrefix}__`);
+    if (!idOk) return false;
+    if (isDoc && targetMs > 0) {
+      return hasValidArmedTimerExp(storedIdOrDoc, targetMs);
+    }
+    return true;
   }
 
   async function fetchCloudDocsSnapshot() {
-    if (!CLOUD_URL || !CLOUD_KEY) return null;
+    if (isHeadlessQuarantine() || !CLOUD_URL || !CLOUD_KEY) return null;
     try {
       const r = await fetch(CLOUD_URL, {
         method: 'POST',
@@ -2098,8 +2312,11 @@
     }
   }
 
+  const inFlightItemTimers = new Set();
   async function scheduleCloudTimerPush(item, cloudDocs = null, forceReschedule = false) {
+    if (isHeadlessQuarantine()) return false;
     if (!item || !item.id || item.completed || item.deleted) return false;
+    if (inFlightItemTimers.has(item.id)) return false;
     if (state.notifPrefs.enabled === false) return false;
     const isHold = Boolean(
       item.matureAt > 0 ||
@@ -2118,77 +2335,84 @@
     const delaySec = Math.round((targetAt - Date.now()) / 1000);
     if (delaySec < 5 || delaySec > 25 * 86400) return false;
 
-    if (!cloudDocs) {
-      cloudDocs = await fetchCloudDocsSnapshot();
-    }
-
-    const expSec = Math.floor(targetAt / 1000) + 12 * 3600;
-    const payload = buildTaskNotificationPayload(item);
-    const localMap = loadLocalTaskSchedMap();
-    let armedAny = false;
-
-    // Cancel legacy bare timer_${item.id} key if present so it never double-fires alongside canonical timer_${item.id}_${devShort}
-    const legacyBareKey = `timer_${item.id}`;
-    if (localMap[legacyBareKey] || (cloudDocs && cloudDocs[legacyBareKey] && cloudDocs[legacyBareKey].id !== 'cancelled')) {
-      delete localMap[legacyBareKey];
-      fetch(CLOUD_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
-        body: JSON.stringify({
-          key: CLOUD_KEY,
-          op: 'patch',
-          patch: { [legacyBareKey]: { id: 'cancelled', updatedAt: new Date().toISOString() } }
-        })
-      }).catch(() => {});
-    }
-
-    for (let i = 0; i < subs.length; i++) {
-      const sub = subs[i];
-      const devShort = String(sub.id || computeCmdDeviceId(sub.endpoint))
-        .replace(/[^a-zA-Z0-9]/g, '')
-        .slice(-10);
-      const timerKey = `timer_${item.id}_${devShort}`;
-      const specPrefix = `${item.id}_${targetAt}_${devShort}`;
-      const cloudId = cloudDocs?.[timerKey]?.id;
-      const localId = localMap[timerKey];
-      const alreadyInCloud = !forceReschedule && matchesArmedTimerSpec(cloudId, specPrefix);
-      const alreadyInLocal = !forceReschedule && !cloudDocs && matchesArmedTimerSpec(localId, specPrefix);
-      if (alreadyInCloud || alreadyInLocal) {
-        localMap[timerKey] = cloudId || localId || specPrefix;
-        armedAny = true;
-        continue;
+    inFlightItemTimers.add(item.id);
+    try {
+      if (!cloudDocs) {
+        cloudDocs = await fetchCloudDocsSnapshot();
       }
-      const timerId = `${specPrefix}__${randomToken(6)}`;
-      try {
-        const vapid = await signVapid(sub.endpoint, expSec);
-        const bodyB64 = await encryptWebPush(sub.keys, payload);
-        const r = await fetch(CLOUD_URL, {
+
+      const expSec = Math.floor(targetAt / 1000) + 12 * 3600;
+      const payload = buildTaskNotificationPayload(item);
+      const localMap = loadLocalTaskSchedMap();
+      let armedAny = false;
+
+      // Cancel legacy bare timer_${item.id} key if present so it never double-fires alongside canonical timer_${item.id}_${devShort}
+      const legacyBareKey = `timer_${item.id}`;
+      if (localMap[legacyBareKey] || (cloudDocs && cloudDocs[legacyBareKey] && cloudDocs[legacyBareKey].id !== 'cancelled')) {
+        delete localMap[legacyBareKey];
+        fetch(CLOUD_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
           body: JSON.stringify({
             key: CLOUD_KEY,
-            op: 'push_delay',
-            timerKey,
-            timerId,
-            delaySec,
-            endpoint: sub.endpoint,
-            vapid,
-            bodyB64
+            op: 'patch',
+            patch: { [legacyBareKey]: { id: 'cancelled', updatedAt: new Date().toISOString() } }
           })
-        });
-        if (r.ok) {
-          localMap[timerKey] = timerId;
-          if (cloudDocs) cloudDocs[timerKey] = { id: timerId };
+        }).catch(() => {});
+      }
+
+      for (let i = 0; i < subs.length; i++) {
+        const sub = subs[i];
+        const devShort = String(sub.id || computeCmdDeviceId(sub.endpoint))
+          .replace(/[^a-zA-Z0-9]/g, '')
+          .slice(-10);
+        const timerKey = `timer_${item.id}_${devShort}`;
+        const specPrefix = `${item.id}_${targetAt}_${devShort}`;
+        const cloudDoc = cloudDocs?.[timerKey];
+        const cloudId = cloudDoc?.id;
+        const localId = localMap[timerKey];
+        const alreadyInCloud = !forceReschedule && matchesArmedTimerSpec(cloudDoc, specPrefix, targetAt);
+        const alreadyInLocal = !forceReschedule && !cloudDocs && matchesArmedTimerSpec(localId, specPrefix);
+        if (alreadyInCloud || alreadyInLocal) {
+          localMap[timerKey] = cloudId || localId || specPrefix;
           armedAny = true;
+          continue;
         }
-      } catch {}
+        const timerId = `${specPrefix}__${randomToken(6)}`;
+        try {
+          const vapid = await signVapid(sub.endpoint, expSec);
+          const bodyB64 = await encryptWebPush(sub.keys, payload);
+          const r = await fetch(CLOUD_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+            body: JSON.stringify({
+              key: CLOUD_KEY,
+              op: 'push_delay',
+              timerKey,
+              timerId,
+              expSec,
+              delaySec,
+              endpoint: sub.endpoint,
+              vapid,
+              bodyB64
+            })
+          });
+          if (r.ok) {
+            localMap[timerKey] = timerId;
+            if (cloudDocs) cloudDocs[timerKey] = { id: timerId, expSec };
+            armedAny = true;
+          }
+        } catch {}
+      }
+      saveLocalTaskSchedMap(localMap);
+      return armedAny;
+    } finally {
+      inFlightItemTimers.delete(item.id);
     }
-    saveLocalTaskSchedMap(localMap);
-    return armedAny;
   }
 
   async function cancelCloudTimerPush(itemId) {
-    if (!itemId) return;
+    if (isHeadlessQuarantine() || !itemId) return;
     const localMap = loadLocalTaskSchedMap();
     const keysToCancel = [`timer_${itemId}`];
     for (const k of Object.keys(localMap)) {
@@ -2218,6 +2442,7 @@
 
   let taskScheduleInFlight = false;
   async function scheduleAllActiveTaskCloudPushes(cloudDocs = null, forceReschedule = false) {
+    if (isHeadlessQuarantine()) return 0;
     if (taskScheduleInFlight) return 0;
     if (state.notifPrefs.enabled === false || !CLOUD_URL || !CLOUD_KEY) return 0;
     const subs = getAllActivePushSubscriptions();
@@ -2681,8 +2906,8 @@
             const isPrayer = Boolean(payload.openPrayer || payload.tab === 'prayers');
             reg.showNotification(payload.title || 'Planner', {
               body: payload.body || '',
-              icon: './icon-192.png?v=21',
-              badge: './icon-192.png?v=21',
+              icon: './icon-192.png?v=26',
+              badge: './icon-192.png?v=26',
               tag: payload.tag || 'theo-cmd-notif',
               renotify: false,
               requireInteraction: Boolean(payload.requireInteraction),
@@ -2861,7 +3086,7 @@
 
   let prayerScheduleInFlight = false;
   async function scheduleUpcomingPrayerCloudPushes(cloudDocs = null, forceReschedule = false) {
-    if (prayerScheduleInFlight) return 0;
+    if (isHeadlessQuarantine() || prayerScheduleInFlight) return 0;
     const cfg = normalizePrayerConfig(state.prayerConfig);
     if (!cfg.enabled || state.notifPrefs.enabled === false || state.notifPrefs.prayers === false || !CLOUD_URL || !CLOUD_KEY) return 0;
     const subs = getAllActivePushSubscriptions();
@@ -2925,10 +3150,11 @@
               const preTargetMs = p.epochMs - cfg.preRemindMin * 60000;
               const preDelaySec = Math.round((preTargetMs - nowMs) / 1000);
               const preSpecPrefix = `${iso}_pre_${p.id}_${preTargetMs}`;
-              const cloudPreId = cloudDocs?.[preTimerKey]?.id;
+              const cloudPreDoc = cloudDocs?.[preTimerKey];
+              const cloudPreId = cloudPreDoc?.id;
               const localPreId = prevLocalMap[preTimerKey];
               if (preDelaySec >= 10 && preDelaySec <= 4 * 86400) {
-                const alreadyInCloud = !forceReschedule && matchesArmedTimerSpec(cloudPreId, preSpecPrefix);
+                const alreadyInCloud = !forceReschedule && matchesArmedTimerSpec(cloudPreDoc, preSpecPrefix, preTargetMs);
                 const alreadyInLocal = !forceReschedule && !cloudDocs && matchesArmedTimerSpec(localPreId, preSpecPrefix);
                 if (!alreadyInCloud && !alreadyInLocal) {
                   const preTimerId = `${preSpecPrefix}__${randomToken(6)}`;
@@ -2950,6 +3176,7 @@
                       op: 'push_delay',
                       timerKey: preTimerKey,
                       timerId: preTimerId,
+                      expSec,
                       delaySec: preDelaySec,
                       endpoint: sub.endpoint,
                       vapid,
@@ -2958,7 +3185,7 @@
                   });
                   if (r.ok) {
                     nextLocalMap[preTimerKey] = preTimerId;
-                    if (cloudDocs) cloudDocs[preTimerKey] = { id: preTimerId };
+                    if (cloudDocs) cloudDocs[preTimerKey] = { id: preTimerId, expSec };
                     scheduledCount++;
                     try {
                       localStorage.setItem(PRAYER_SCHED_KEY, JSON.stringify(nextLocalMap));
@@ -2977,10 +3204,11 @@
             // B) Exact Prayer Time Notification
             const delaySec = Math.round((p.epochMs - nowMs) / 1000);
             const specPrefix = `${iso}_${p.id}_${p.epochMs}`;
-            const cloudId = cloudDocs?.[timerKey]?.id;
+            const cloudDoc = cloudDocs?.[timerKey];
+            const cloudId = cloudDoc?.id;
             const localId = prevLocalMap[timerKey];
             if (delaySec >= 5 && delaySec <= 4 * 86400 && p.enabled) {
-              const alreadyInCloud = !forceReschedule && matchesArmedTimerSpec(cloudId, specPrefix);
+              const alreadyInCloud = !forceReschedule && matchesArmedTimerSpec(cloudDoc, specPrefix, p.epochMs);
               const alreadyInLocal = !forceReschedule && !cloudDocs && matchesArmedTimerSpec(localId, specPrefix);
 
               if (!alreadyInCloud && !alreadyInLocal) {
@@ -3003,6 +3231,7 @@
                     op: 'push_delay',
                     timerKey,
                     timerId,
+                    expSec,
                     delaySec,
                     endpoint: sub.endpoint,
                     vapid,
@@ -3011,7 +3240,7 @@
                 });
                 if (r.ok) {
                   nextLocalMap[timerKey] = timerId;
-                  if (cloudDocs) cloudDocs[timerKey] = { id: timerId };
+                  if (cloudDocs) cloudDocs[timerKey] = { id: timerId, expSec };
                   scheduledCount++;
                   try {
                     localStorage.setItem(PRAYER_SCHED_KEY, JSON.stringify(nextLocalMap));
@@ -3256,23 +3485,43 @@
   /* ============================================================================
      ADD / UPDATE / DELEGATE TASK ACTIONS
      ============================================================================ */
-  async function addTaskFromDraft(sendWhatsAppImmediately = false) {
+  function resolveDraftWhenSelection() {
+    const selEl = document.getElementById('draft-when-select');
+    const rawVal = selEl ? selEl.value : state.draft.whenSelect || 'auto';
+    const selIso =
+      state.selectedPlanDate && state.selectedPlanDate !== 'all' ? state.selectedPlanDate : '';
+    if (rawVal === 'today') return { choice: 'auto', horizonHint: 'today' };
+    if (rawVal === 'tomorrow') return { choice: 'auto', horizonHint: 'tomorrow' };
+    if (rawVal === 'week') return { choice: 'auto', horizonHint: 'week' };
+    if (rawVal === 'backlog') return { choice: 'park', horizonHint: 'backlog' };
+    if (rawVal === '1d') return { choice: '1d', horizonHint: 'tomorrow' };
+    if (rawVal === '5d') return { choice: '5d', horizonHint: 'week' };
+    if (selIso) return { choice: selIso, horizonHint: horizonFromIso(selIso) };
+    const h = state.draft.horizon && state.draft.horizon !== 'auto' ? state.draft.horizon : '';
+    return { choice: state.draft.waitChoice || 'auto', horizonHint: h };
+  }
+
+  async function addTaskFromDraft(sendWhatsAppImmediately = false, keepFocus = false) {
     const capDomVal = document.getElementById('capture-input')?.value || '';
     if (capDomVal && !state.draft.text) {
       state.draft.text = capDomVal;
     }
     const rawText = state.draft.text.trim();
     if (!rawText) {
-      showToast('Type a task, reminder, wait check, or @Person first');
-      document.getElementById('capture-input')?.focus();
+      openNewPlanSheet();
       return;
+    }
+
+    const clusterSelEl = document.getElementById('draft-cluster-select');
+    if (clusterSelEl && clusterSelEl.value && !state.draft.clusterOverride) {
+      state.draft.clusterOverride = clusterSelEl.value;
     }
 
     const ctx = extractSmartContext(rawText);
     const cluster = detectCluster(rawText, state.draft.clusterOverride);
-    const horizonHint = state.draft.horizon && state.draft.horizon !== 'auto' ? state.draft.horizon : '';
+    const { choice, horizonHint } = resolveDraftWhenSelection();
     const timing = resolveTimingFromChoice(
-      state.draft.waitChoice,
+      choice,
       rawText,
       cluster.id,
       ctx.amount,
@@ -3301,25 +3550,31 @@
       (cluster.id === 'ideas' || cluster.id === 'want_to_do' ? 'backlog' : 'today');
     const checklist = parseChecklistStepsFromText(state.draft.checklistRaw || '');
     const notes = String(state.draft.notes || '').trim();
+    const planDate = timing.planDate || '';
+    const dueAt = Number(timing.targetAt || 0);
+    const isHold = Boolean(timing.isHold);
+    const isParked = effectiveHorizon === 'backlog' && !planDate && !dueAt;
 
     const newItem = {
       id,
       title: cleanTitle,
-      category: cluster.id,
+      category: isDelegated && !state.draft.clusterOverride ? 'people' : cluster.id,
       customGroup: state.draft.customGroup || '',
       subTag,
       buId,
       amount: ctx.amount || 0,
       priority,
       horizon: effectiveHorizon,
+      planDate,
+      hasAlarm: Boolean(timing.hasAlarm),
       notes,
       checklist,
-      kind: timing.targetAt === 0 ? 'parked' : timing.isHold ? 'wait' : 'task',
+      kind: isParked ? 'parked' : isHold ? 'wait' : 'task',
       recur: timing.recur || 'none',
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      dueAt: timing.targetAt || 0,
-      matureAt: timing.isHold ? timing.targetAt : 0,
+      dueAt,
+      matureAt: isHold ? dueAt : 0,
       completed: false,
       isDelegated,
       assigneeId,
@@ -3344,6 +3599,7 @@
     state.draft = {
       text: '',
       waitChoice: 'auto',
+      whenSelect: 'auto',
       horizon: 'auto',
       priority: '',
       clusterOverride: '',
@@ -3357,22 +3613,31 @@
     };
     const inp = document.getElementById('capture-input');
     if (inp) inp.value = '';
+    if (clusterSelEl) clusterSelEl.value = '';
+    const whenSelEl = document.getElementById('draft-when-select');
+    if (whenSelEl) whenSelEl.value = 'auto';
 
     saveLocalState();
     renderAll();
+
+    if (keepFocus && inp) {
+      inp.focus({ preventScroll: true });
+    }
 
     if (newItem.matureAt || newItem.dueAt) {
       scheduleCloudTimerPush(newItem).catch(() => {});
     }
     syncAll(newItem).catch(() => {});
 
+    const targetCluster = CLUSTERS.find((c) => c.id === newItem.category) || cluster;
+    const whenSummary = planDate ? ` · ${formatIsoFriendly(planDate, false)}` : timing.label ? ` · ${timing.label}` : '';
     if (sendWhatsAppImmediately && isDelegated) {
       dispatchWhatsAppDelegation(newItem.id);
     } else {
       showToast(
         isDelegated
-          ? `Assigned to ${assigneeName} (${cluster.shortLabel})`
-          : `Added to ${cluster.shortLabel}`
+          ? `Assigned to ${assigneeName} (${targetCluster.shortLabel}${whenSummary})`
+          : `Added to ${targetCluster.shortLabel}${whenSummary}`
       );
     }
   }
@@ -3380,14 +3645,26 @@
   async function addQuickInlineTask(opts = {}) {
     const rawText = String(opts.title || '').trim();
     if (!rawText) {
-      showToast('Enter a task title first');
+      showToast('Enter a plan title first');
       return null;
     }
     const ctx = extractSmartContext(rawText);
     const cluster = detectCluster(rawText, opts.clusterId || '');
-    const horizonHint = opts.horizon || '';
-    const waitChoice = opts.waitChoice || 'auto';
-    const timing = resolveTimingFromChoice(waitChoice, rawText, cluster.id, ctx.amount, horizonHint);
+    const activeSelIso =
+      state.selectedPlanDate && state.selectedPlanDate !== 'all' ? state.selectedPlanDate : '';
+
+    let timing;
+    if (opts.explicitTiming) {
+      timing = opts.explicitTiming;
+    } else if (opts.planDate && /^\d{4}-\d{2}-\d{2}$/.test(opts.planDate)) {
+      timing = resolveTimingFromChoice(opts.planDate, rawText, cluster.id, ctx.amount, opts.horizon || '');
+    } else if (!opts.waitChoice && !opts.horizon && activeSelIso && cluster.id !== 'ideas') {
+      timing = resolveTimingFromChoice(activeSelIso, rawText, cluster.id, ctx.amount, horizonFromIso(activeSelIso));
+    } else {
+      const horizonHint = opts.horizon || '';
+      const waitChoice = opts.waitChoice || 'auto';
+      timing = resolveTimingFromChoice(waitChoice, rawText, cluster.id, ctx.amount, horizonHint);
+    }
 
     let assigneeName = opts.assigneeName || ctx.assigneeName || '';
     let assigneeId = opts.assigneeId || ctx.assigneeId || '';
@@ -3419,12 +3696,18 @@
     const isDelegated = Boolean(assigneeName) || Boolean(opts.forceDelegated);
     const taskToken = isDelegated ? randomToken(12) : '';
     const priority = opts.priority || ctx.priority || 'p3';
+    const planDate = timing.planDate || '';
+    const dueAt = Number(timing.targetAt || 0);
+    const isHold = Boolean(timing.isHold);
     const effectiveHorizon =
-      horizonHint ||
+      opts.horizon ||
       timing.horizon ||
-      (cluster.id === 'ideas' || cluster.id === 'want_to_do' ? 'backlog' : 'today');
-    const checklist = parseChecklistStepsFromText(opts.checklistRaw || '');
+      (planDate ? horizonFromIso(planDate) : cluster.id === 'ideas' || cluster.id === 'want_to_do' ? 'backlog' : 'today');
+    const checklist = Array.isArray(opts.checklist)
+      ? normalizeChecklistArray(opts.checklist)
+      : parseChecklistStepsFromText(opts.checklistRaw || '');
     const notes = String(opts.notes || '').trim();
+    const isParked = effectiveHorizon === 'backlog' && !planDate && !dueAt;
 
     const newItem = {
       id,
@@ -3436,14 +3719,16 @@
       amount: ctx.amount || 0,
       priority,
       horizon: effectiveHorizon,
+      planDate,
+      hasAlarm: Boolean(timing.hasAlarm),
       notes,
       checklist,
-      kind: timing.targetAt === 0 ? 'parked' : timing.isHold ? 'wait' : 'task',
+      kind: isParked ? 'parked' : isHold ? 'wait' : 'task',
       recur: timing.recur || 'none',
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      dueAt: timing.targetAt || 0,
-      matureAt: timing.isHold ? timing.targetAt : 0,
+      dueAt,
+      matureAt: isHold ? dueAt : 0,
       completed: false,
       isDelegated,
       assigneeId,
@@ -3466,7 +3751,9 @@
 
     state.reminders.unshift(newItem);
     saveLocalState();
-    renderAll();
+    if (!opts.skipRender) {
+      renderAll();
+    }
 
     if (newItem.matureAt || newItem.dueAt) {
       scheduleCloudTimerPush(newItem).catch(() => {});
@@ -3475,11 +3762,13 @@
 
     if (opts.sendWhatsApp && isDelegated) {
       dispatchWhatsAppDelegation(newItem.id);
-    } else {
+    } else if (!opts.silentToast) {
+      const targetCluster = CLUSTERS.find((c) => c.id === newItem.category) || cluster;
+      const whenSummary = planDate ? ` · ${formatIsoFriendly(planDate, false)}` : '';
       showToast(
         isDelegated
-          ? `Assigned to ${assigneeName}`
-          : `Planned in ${cluster.shortLabel}`
+          ? `Assigned to ${assigneeName}${whenSummary}`
+          : `Added to ${targetCluster.shortLabel}${whenSummary}`
       );
     }
     return newItem;
@@ -3493,11 +3782,12 @@
       if (!r || r.completed || r.deleted) continue;
       if (r.category === 'ideas' || r.category === 'want_to_do') continue;
       const targetAt = Number(r.matureAt || r.dueAt || 0);
-      const isReady = (targetAt > 0 && now >= targetAt) || r.delegationStatus === 'done';
-      const isDueToday = targetAt > 0 && itemIsoDate(r) === tIso;
+      const isReady = (isHoldOrTimerRecord(r) && targetAt > 0 && now >= targetAt) || r.delegationStatus === 'done';
+      const isDueToday = itemIsoDate(r) === tIso;
       const isHighPri = r.priority === 'p1' || r.priority === 'p2';
       if ((isReady || isDueToday || isHighPri) && r.horizon !== 'today') {
         r.horizon = 'today';
+        r.planDate = tIso;
         r.updatedAt = now;
         promoted++;
       }
@@ -3512,12 +3802,7 @@
         if (r.category === 'ideas' || r.category === 'want_to_do') continue;
         if (getEffectiveHorizon(r, now) !== 'today') {
           r.horizon = 'today';
-          if (!r.dueAt && !r.matureAt) {
-            const eod = new Date(now);
-            eod.setHours(18, 0, 0, 0);
-            if (eod.getTime() <= now) eod.setTime(now + 2 * 3600000);
-            r.dueAt = eod.getTime();
-          }
+          r.planDate = tIso;
           r.updatedAt = now;
           promoted++;
           if (todayCount + promoted >= 4) break;
@@ -3530,8 +3815,8 @@
     syncAll().catch(() => {});
     showToast(
       promoted > 0
-        ? `⚡ Auto-Planned ${promoted} priority/ready item${promoted === 1 ? '' : 's'} into Today's Focus`
-        : `✓ Today's Focus is already aligned with your top priorities`
+        ? `Moved ${promoted} priority item${promoted === 1 ? '' : 's'} into Today`
+        : `Today's timeline is already aligned with your top priorities`
     );
   }
 
@@ -3661,6 +3946,11 @@
      CLOUD RELAY & WORKSTATION BRIDGE SYNC
      ============================================================================ */
   async function probeBridge() {
+    if (isHeadlessQuarantine()) {
+      state.bridgeOrigin = '';
+      state.syncMode = 'cloud';
+      return '';
+    }
     const isMobileDevice =
       /iPhone|iPad|iPod|Android/i.test(navigator.userAgent || '') ||
       (typeof window !== 'undefined' && window.innerWidth <= 820 && location.port !== String(BRIDGE_PORT));
@@ -3720,6 +4010,10 @@
     const syncBtn = document.getElementById('btn-sync-now');
     const dot = document.getElementById('sync-dot');
     const lbl = document.getElementById('sync-label');
+    if (isHeadlessQuarantine()) {
+      if (syncBtn) syncBtn.hidden = true;
+      return;
+    }
     let syncedOk = false;
 
     // 1. Try Local Bridge if reachable
@@ -3927,6 +4221,7 @@
     const timeEl = document.getElementById('prayer-hud-time');
     const cdEl = document.getElementById('prayer-hud-cd');
     const dockPrayerBadge = document.getElementById('dock-badge-prayers');
+    const topPrayerBadge = document.getElementById('top-badge-prayers');
     if (!btn || !nameEl || !timeEl) return;
 
     const now = Date.now();
@@ -3943,6 +4238,11 @@
         dockPrayerBadge.hidden = false;
         dockPrayerBadge.textContent = nxt.time24;
         dockPrayerBadge.className = `dock-pill ${isImminent ? 'emerald' : 'steel'} tabular`;
+      }
+      if (topPrayerBadge) {
+        topPrayerBadge.hidden = false;
+        topPrayerBadge.textContent = `${nxt.label} ${nxt.time24}`;
+        topPrayerBadge.className = `hud-nav-badge ${isImminent ? 'emerald' : 'steel'} tabular`;
       }
       btn.classList.toggle('imminent', isImminent);
       btn.title = `Shia Prayer Times (${today.locationName} · Day #${today.dayOfYear})\nFajr: ${today.fajr.time24}  |  Dohor: ${today.dhuhr.time24}  |  Maghrib: ${today.maghrib.time24}\nNext: ${nxt.label} (${nxt.arabic}) at ${nxt.time24} (in ${cd})\nClick to open Prayer Times tab`;
@@ -3980,207 +4280,114 @@
 
   function renderLiveAdvisorDrawer() {
     const drawer = document.getElementById('live-advisor-drawer');
+    const delGroup = document.getElementById('capture-delegate-group');
     const delBtn = document.getElementById('btn-pick-assignee');
     const delLbl = document.getElementById('capture-assignee-label');
     const delClearBtn = document.getElementById('btn-clear-assignee');
     const submitBtn = document.getElementById('capture-submit-btn');
-    const horBtn = document.getElementById('btn-draft-horizon');
-    const horLbl =
-      document.getElementById('draft-horizon-label') ||
-      document.getElementById('capture-horizon-label');
-    const priBtn = document.getElementById('btn-draft-priority');
-    const priLbl =
-      document.getElementById('draft-priority-label') ||
-      document.getElementById('capture-priority-label');
-    if (!drawer) return;
+    const clusterSel = document.getElementById('draft-cluster-select');
+    const clusterAutoOpt = document.getElementById('draft-cluster-auto-opt');
+    const whenSel = document.getElementById('draft-when-select');
+    const whenAutoOpt = document.getElementById('draft-when-auto-opt');
 
     const text = state.draft.text.trim();
     const ctx = extractSmartContext(text);
     const activeAssignee = state.draft.assigneeName || ctx.assigneeName || '';
+    const detectedCluster = detectCluster(text, '');
+    const effectiveCluster = detectCluster(text, state.draft.clusterOverride);
+    const selIso =
+      state.selectedPlanDate && state.selectedPlanDate !== 'all' ? state.selectedPlanDate : '';
 
-    if (delBtn && delLbl) {
+    if (clusterAutoOpt) {
+      clusterAutoOpt.textContent = text
+        ? `Auto · ${detectedCluster.shortLabel}`
+        : 'Category: Auto';
+    }
+    if (clusterSel && document.activeElement !== clusterSel) {
+      clusterSel.value = state.draft.clusterOverride || '';
+      clusterSel.classList.toggle('is-customized', Boolean(state.draft.clusterOverride));
+    }
+
+    if (whenAutoOpt) {
+      if (selIso) {
+        whenAutoOpt.textContent = `When: ${formatIsoFriendly(selIso, false)}`;
+      } else if (effectiveCluster.id === 'ideas' || effectiveCluster.id === 'want_to_do') {
+        whenAutoOpt.textContent = 'When: Someday';
+      } else {
+        whenAutoOpt.textContent = 'When: Today';
+      }
+    }
+    if (whenSel && document.activeElement !== whenSel) {
+      const wVal = state.draft.whenSelect || 'auto';
+      whenSel.value = wVal;
+      whenSel.classList.toggle('is-customized', wVal !== 'auto' || Boolean(selIso));
+    }
+
+    if (delGroup && delBtn && delLbl) {
       if (activeAssignee) {
+        delGroup.hidden = false;
         delBtn.classList.add('active');
-        delLbl.textContent = activeAssignee;
+        delLbl.textContent = `@${activeAssignee}`;
         if (delClearBtn) delClearBtn.hidden = false;
       } else {
+        delGroup.hidden = true;
         delBtn.classList.remove('active');
         delLbl.textContent = 'Delegate';
         if (delClearBtn) delClearBtn.hidden = true;
       }
     }
 
-    const curHor = state.draft.horizon || 'auto';
-    if (horBtn && horLbl) {
-      const hMap = { auto: 'Horizon', today: 'Today', tomorrow: 'Tomorrow', week: 'This Week', backlog: 'Backlog' };
-      horLbl.textContent = hMap[curHor] || 'Horizon';
-      horBtn.classList.toggle('active', curHor !== 'auto');
-    }
-
-    const curPri = state.draft.priority || '';
-    if (priBtn && priLbl) {
-      priLbl.textContent = curPri ? curPri.toUpperCase() : 'P-Level';
-      priBtn.classList.toggle('active', Boolean(curPri));
-      priBtn.classList.toggle('p1', curPri === 'p1');
-    }
-
     if (submitBtn) {
-      submitBtn.textContent = activeAssignee ? '+ Assign' : '+ Plan';
+      submitBtn.textContent = activeAssignee ? 'Assign Plan' : 'Add Plan';
     }
 
-    if (
-      !text &&
-      !state.draft.assigneeName &&
-      !state.draft.clusterOverride &&
-      curHor === 'auto' &&
-      !curPri
-    ) {
+    if (!drawer) return;
+
+    const { choice, horizonHint } = resolveDraftWhenSelection();
+    const timing = resolveTimingFromChoice(
+      choice,
+      text,
+      effectiveCluster.id,
+      ctx.amount,
+      horizonHint
+    );
+
+    // Only surface the compact 1-line helper strip when @Assignee delegation or $Amount / Wait Timer is detected
+    const showContextStrip = Boolean(
+      activeAssignee || (text && (ctx.amount > 0 || timing.isHold))
+    );
+    if (!showContextStrip) {
       drawer.hidden = true;
       drawer.innerHTML = '';
       return;
     }
 
     drawer.hidden = false;
-    const cluster = detectCluster(text, state.draft.clusterOverride);
-    const horizonHint = curHor !== 'auto' ? curHor : '';
-    const timing = resolveTimingFromChoice(
-      state.draft.waitChoice,
-      text,
-      cluster.id,
-      ctx.amount,
-      horizonHint
-    );
-    const effectivePri = curPri || ctx.priority || 'p3';
-
-    const horizonChips = [
-      { k: 'auto', lbl: 'Auto Horizon' },
-      { k: 'today', lbl: 'Today Focus' },
-      { k: 'tomorrow', lbl: 'Tomorrow' },
-      { k: 'week', lbl: 'This Week' },
-      { k: 'backlog', lbl: 'Backlog' }
-    ];
-
-    const timeChips = [
-      { k: 'auto', lbl: `Auto (${timing.label})` },
-      { k: 'park', lbl: 'No Timer' },
-      { k: '3h', lbl: 'In 3h' },
-      { k: 'tonight', lbl: 'Tonight 20:30' },
-      { k: '1d', lbl: '+24h' },
-      { k: '2d', lbl: '+2d' },
-      { k: '5d', lbl: '+5d (Ship)' },
-      { k: '7d', lbl: '+7d' }
-    ];
-
-    const activeEl = document.activeElement;
-    const isTypingInDrawerSubInputs =
-      activeEl &&
-      (activeEl.id === 'draft-steps-input' || activeEl.id === 'draft-notes-input') &&
-      drawer.contains(activeEl);
-
-    if (isTypingInDrawerSubInputs) {
-      drawer.querySelectorAll('[data-horizon-chip]').forEach((b) => {
-        b.classList.toggle('active', b.getAttribute('data-horizon-chip') === curHor);
-      });
-      drawer.querySelectorAll('[data-priority-chip]').forEach((b) => {
-        b.classList.toggle('active', b.getAttribute('data-priority-chip') === effectivePri);
-      });
-      drawer.querySelectorAll('[data-wait-chip]').forEach((b) => {
-        b.classList.toggle('active', b.getAttribute('data-wait-chip') === state.draft.waitChoice);
-      });
-      drawer.querySelectorAll('[data-cluster-chip]').forEach((b) => {
-        b.classList.toggle('active', (b.getAttribute('data-cluster-chip') || '') === (state.draft.clusterOverride || ''));
-      });
-      return;
-    }
-
     drawer.innerHTML = `
-      <div class="advisor-top-row">
-        <div class="advisor-detected-badges">
-          <span class="t-pill" style="border-color:var(--brass);color:var(--brass-bright)">
-            ${esc(cluster.label)}
-          </span>
-          <span class="t-pill ${effectivePri === 'p1' ? 'p1' : effectivePri === 'p2' ? 'p2' : ''}">
-            ${effectivePri.toUpperCase()}
-          </span>
-          ${
-            activeAssignee
-              ? `<span class="t-pill person">Assignee: ${esc(activeAssignee)}</span>`
-              : ''
-          }
-          ${ctx.buTag ? `<span class="t-pill">${esc(ctx.buTag)}</span>` : ''}
-          ${ctx.appTag ? `<span class="t-pill timer">${esc(ctx.appTag)}</span>` : ''}
-          ${ctx.amount > 0 ? `<span class="t-pill amt">$${fmtInt(ctx.amount)}</span>` : ''}
-          <span class="t-pill ${timing.targetAt ? 'timer' : ''}">
-            ${esc(timing.label)}
-          </span>
-        </div>
+      <div class="advisor-detected-badges">
+        <span class="t-pill" style="border-color:var(--border-mid);color:var(--text-primary)">
+          ${esc(effectiveCluster.label)}
+        </span>
+        ${
+          activeAssignee
+            ? `<span class="t-pill person">Delegating to ${esc(activeAssignee)}</span>`
+            : ''
+        }
+        ${ctx.buTag ? `<span class="t-pill">${esc(ctx.buTag)}</span>` : ''}
+        ${ctx.amount > 0 ? `<span class="t-pill amt">$${fmtInt(ctx.amount)}</span>` : ''}
+        ${
+          timing.label
+            ? `<span class="t-pill ${timing.isHold ? 'timer' : ''}">${esc(timing.label)}</span>`
+            : ''
+        }
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
         ${
           activeAssignee
             ? `<button type="button" class="mini-chip wa-btn" id="btn-add-and-whatsapp">📲 Assign &amp; WhatsApp</button>`
             : ''
         }
-      </div>
-
-      <div class="advisor-chip-strip">
-        ${horizonChips
-          .map(
-            (h) => `
-          <button type="button" class="mini-chip ${curHor === h.k ? 'active' : ''}" data-horizon-chip="${h.k}">
-            ${esc(h.lbl)}
-          </button>
-        `
-          )
-          .join('')}
-        <span style="width:1px;height:14px;background:var(--border-subtle);margin:0 2px"></span>
-        ${PRIORITY_LEVELS.map(
-          (p) => `
-          <button type="button" class="mini-chip ${effectivePri === p.id ? 'active' : ''}" data-priority-chip="${p.id}">
-            ${esc(p.label)}
-          </button>
-        `
-        ).join('')}
-      </div>
-
-      <div class="advisor-chip-strip">
-        ${timeChips
-          .map(
-            (c) => `
-          <button type="button" class="mini-chip ${state.draft.waitChoice === c.k ? 'active' : ''}" data-wait-chip="${c.k}">
-            ${esc(c.lbl)}
-          </button>
-        `
-          )
-          .join('')}
-      </div>
-
-      <div class="advisor-chip-strip">
-        <button type="button" class="mini-chip ${!state.draft.clusterOverride ? 'active' : ''}" data-cluster-chip="">Auto Cluster</button>
-        ${CLUSTERS.map(
-          (c) => `
-          <button type="button" class="mini-chip ${state.draft.clusterOverride === c.id ? 'active' : ''}" data-cluster-chip="${c.id}">
-            ${esc(c.shortLabel)}
-          </button>
-        `
-        ).join('')}
-      </div>
-
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;padding-top:2px">
-        <input
-          type="text"
-          id="draft-steps-input"
-          enterkeyhint="done"
-          value="${esc(state.draft.checklistRaw || '')}"
-          placeholder="Sub-steps (optional, separate with | or ; e.g. Verify amount | Save receipt)"
-          style="padding:6px 9px;border-radius:6px;background:var(--bg-card);border:1px solid var(--border-subtle);font-size:11.5px;color:var(--text-primary)"
-        >
-        <input
-          type="text"
-          id="draft-notes-input"
-          enterkeyhint="done"
-          value="${esc(state.draft.notes || '')}"
-          placeholder="Instructions or context note (optional)…"
-          style="padding:6px 9px;border-radius:6px;background:var(--bg-card);border:1px solid var(--border-subtle);font-size:11.5px;color:var(--text-primary)"
-        >
+        <button type="button" class="mini-chip" id="btn-advisor-open-details">Add steps or exact time…</button>
       </div>
     `;
   }
@@ -4191,15 +4398,9 @@
   function renderTickerRowHtml(item, now = Date.now()) {
     const cluster = CLUSTERS.find((c) => c.id === item.category) || CLUSTERS[3];
     const targetAt = Number(item.matureAt || item.dueAt || 0);
-    const isHold = Boolean(
-      item.matureAt ||
-        item.kind === 'wait' ||
-        cluster.id === 'verify' ||
-        cluster.id === 'shipping' ||
-        cluster.id === 'payments'
-    );
+    const isHold = isHoldOrTimerRecord(item);
     const isMatured = !item.completed && targetAt > 0 && now >= targetAt && isHold;
-    const isOverdue = !item.completed && targetAt > 0 && now >= targetAt && !isHold;
+    const isOverdue = !item.completed && Boolean(item.hasAlarm) && targetAt > 0 && now >= targetAt && !isHold;
     const isHolding = !item.completed && targetAt > now && isHold;
     const isExpanded = state.expandedRowId === item.id;
     const pri = item.priority || 'p3';
@@ -4367,11 +4568,17 @@
             ${delBadge}
             ${item.amount > 0 ? `<span class="t-pill amt">$${fmtInt(item.amount)}</span>` : ''}
             ${
-              !item.completed && targetAt > 0
-                ? `<span class="t-pill ${isMatured || item.delegationStatus === 'done' ? 'matured' : 'timer'} tabular">${
-                    isMatured ? 'Ready Now' : `${esc(countdown)}`
-                  }</span>`
-                : ''
+              !item.completed && targetAt > 0 && (targetAt > now || isMatured || isOverdue)
+                ? `<span class="t-pill ${
+                    isMatured || item.delegationStatus === 'done'
+                      ? 'matured'
+                      : isOverdue
+                        ? 'p1'
+                        : 'timer'
+                  } tabular">${isMatured ? 'Ready' : isOverdue ? 'Due' : esc(countdown)}</span>`
+                : !item.completed && item.planDate
+                  ? `<span class="t-pill tabular">${esc(formatIsoFriendly(item.planDate, false))}</span>`
+                  : ''
             }
           </div>
         </div>
@@ -4451,8 +4658,8 @@
      ============================================================================ */
   function buildSevenDayHorizonStripHtml(activeItems, now = Date.now()) {
     const baseIso = todayIso();
-    const cfg = normalizePrayerConfig(state.prayerConfig);
-    const selDate = state.selectedPlanDate || 'all';
+    const selDate =
+      state.selectedPlanDate && state.selectedPlanDate !== 'all' ? state.selectedPlanDate : 'all';
     const dayCells = [];
 
     for (let i = 0; i < 7; i++) {
@@ -4466,39 +4673,32 @@
             ? 'Tomorrow'
             : dObj.toLocaleDateString('en-US', { weekday: 'short' });
       const dateShort = dObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      const dayCount = activeItems.filter((r) => {
-        const rIso = itemIsoDate(r);
-        if (rIso === iso) return true;
-        if (i === 0 && !rIso && getEffectiveHorizon(r, now) === 'today') return true;
-        if (i === 1 && !rIso && r.horizon === 'tomorrow') return true;
-        return false;
-      }).length;
-      const sch = computeShiaPrayerTimesForDate(iso, cfg);
+      const dayCount = activeItems.filter((r) => matchesPlanDateFilter(r, iso, now)).length;
 
       dayCells.push(`
-        <div class="horizon-day-cell ${selDate === iso ? 'active' : ''}" data-plan-date="${iso}" title="Filter tasks planned for ${dayName} (${dateShort})">
+        <button type="button" class="horizon-day-cell ${selDate === iso ? 'active' : ''} ${i === 0 ? 'is-today-cell' : ''}" data-plan-date="${iso}" title="Plan or view items for ${esc(dayName)} (${esc(dateShort)})">
           <div class="horizon-day-top">
-            <span class="horizon-day-name">${esc(dayName)} · ${esc(dateShort)}</span>
-            <span class="horizon-day-count ${dayCount > 0 ? 'has-items' : ''} tabular">${dayCount}</span>
+            <span class="horizon-day-name">${esc(dayName)}</span>
+            ${
+              dayCount > 0
+                ? `<span class="horizon-day-count has-items tabular">${dayCount}</span>`
+                : `<span class="horizon-day-count tabular" style="opacity:0.42">0</span>`
+            }
           </div>
-          <div class="horizon-day-meta tabular">
-            <span>Dohor ${esc(sch.dhuhr.time24)} · Maghrib ${esc(sch.maghrib.time24)}</span>
-          </div>
-        </div>
+          <div class="horizon-day-meta">${esc(dateShort)}</div>
+        </button>
       `);
     }
 
     return `
       <div class="horizon-week-strip">
-        <div class="horizon-day-cell ${selDate === 'all' ? 'active' : ''}" data-plan-date="all" title="Show all active horizons">
+        <button type="button" class="horizon-day-cell ${selDate === 'all' ? 'active' : ''}" data-plan-date="all" title="Show all active plans across every date">
           <div class="horizon-day-top">
-            <span class="horizon-day-name">All Horizons</span>
-            <span class="horizon-day-count has-items tabular">${activeItems.length}</span>
+            <span class="horizon-day-name">All Plans</span>
+            <span class="horizon-day-count ${activeItems.length > 0 ? 'has-items' : ''} tabular">${activeItems.length}</span>
           </div>
-          <div class="horizon-day-meta">
-            <span>Full Executive Ledger</span>
-          </div>
-        </div>
+          <div class="horizon-day-meta">All active dates</div>
+        </button>
         ${dayCells.join('')}
       </div>
     `;
@@ -4572,64 +4772,49 @@
           Number(a.completedAt || a.updatedAt || a.createdAt || 0)
       );
 
-    const selDate = state.selectedPlanDate || 'all';
+    const selDate =
+      state.selectedPlanDate && state.selectedPlanDate !== 'all' ? state.selectedPlanDate : 'all';
     const baseIso = todayIso();
-    const tomorrowIso = shiftIsoDate(baseIso, 1);
     const active =
       selDate === 'all'
         ? allActive
-        : allActive.filter((r) => {
-            const rIso = itemIsoDate(r);
-            if (rIso === selDate) return true;
-            if (selDate === baseIso && !rIso && getEffectiveHorizon(r, now) === 'today') return true;
-            if (selDate === tomorrowIso && !rIso && r.horizon === 'tomorrow') return true;
-            return false;
-          });
+        : allActive.filter((r) => matchesPlanDateFilter(r, selDate, now));
 
     const isRadarMode = state.planningMode === 'radar';
     root.classList.toggle('is-radar-mode', isRadarMode);
 
-    const urgentItems = allActive.filter((r) => {
-      const t = Number(r.matureAt || r.dueAt || 0);
-      return (t > 0 && now >= t) || r.delegationStatus === 'done';
-    });
-
-    const todayFocusCount = allActive.filter((r) => getEffectiveHorizon(r, now) === 'today').length;
+    const urgentItems = allActive.filter((r) => isReadyNowItem(r, now));
+    const todayFocusCount = allActive.filter((r) => matchesPlanDateFilter(r, baseIso, now)).length;
 
     const toolbarHtml = `
       <div class="planning-toolbar">
         <div class="planning-mode-seg" role="tablist" aria-label="Planning View Mode">
           <button type="button" class="planning-mode-btn ${state.planningMode === 'radar' ? 'active' : ''}" data-planning-mode="radar">
-            2×4 Matrix
+            Categories
           </button>
           <button type="button" class="planning-mode-btn ${state.planningMode === 'horizon' ? 'active' : ''}" data-planning-mode="horizon">
-            Horizon Plan (${todayFocusCount} Today)
+            Timeline (${todayFocusCount} Today)
           </button>
           <button type="button" class="planning-mode-btn ${state.planningMode === 'bus' ? 'active' : ''}" data-planning-mode="bus">
-            BHFIRMS BUs
+            Business Units
           </button>
           <button type="button" class="planning-mode-btn ${state.planningMode === 'clusters' ? 'active' : ''}" data-planning-mode="clusters">
-            Register (${active.length})
+            List (${active.length})
           </button>
           <button type="button" class="planning-mode-btn ${state.planningMode === 'completed' ? 'active' : ''}" data-planning-mode="completed">
-            ✓ Completed (${completed.length})
+            Completed (${completed.length})
           </button>
         </div>
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-          ${
-            selDate !== 'all'
-              ? `<button type="button" class="mini-chip active" data-plan-date="all">📅 Filtering ${esc(selDate)} ✕</button>`
-              : ''
-          }
-          <button type="button" class="mini-chip" id="btn-auto-plan-today" title="Promote urgent, ready & due-today items into Today's Focus">
-            ⚡ Auto-Plan Today
+          <button type="button" class="mini-chip" id="btn-auto-plan-today" title="Promote matured holds, urgent items & due-today items into Today">
+            Auto-Focus Today
           </button>
-          <button type="button" class="mini-chip" id="btn-goto-delegation-studio" style="border-color:var(--brass);color:var(--brass-bright)">
-            + Delegate Task
+          <button type="button" class="mini-chip" id="btn-goto-delegation-studio">
+            Delegate
           </button>
           ${
             urgentItems.length > 0
-              ? `<button type="button" class="mini-chip active" data-goto-tasks-filter="ready" style="border-color:var(--emerald);color:var(--emerald)">${urgentItems.length} Ready Now →</button>`
+              ? `<button type="button" class="mini-chip active" data-goto-tasks-filter="ready" style="border-color:var(--emerald);color:var(--emerald)">${urgentItems.length} Ready to Verify →</button>`
               : ''
           }
         </div>
@@ -4637,11 +4822,26 @@
     `;
 
     const weekStripHtml = buildSevenDayHorizonStripHtml(allActive, now);
+    const activeDateBarHtml =
+      selDate !== 'all'
+        ? `
+      <div class="active-date-context-bar">
+        <span>Planning for <strong>${esc(formatIsoFriendly(selDate, true))}</strong> · ${active.length} planned</span>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <button type="button" class="bento-inline-btn" data-open-new-plan-date="${esc(selDate)}">
+            + Add Plan for ${esc(formatIsoFriendly(selDate, false))}
+          </button>
+          <button type="button" class="mini-chip" data-plan-date="all">Show All Dates ✕</button>
+        </div>
+      </div>
+    `
+        : '';
 
     // MODE E: DEDICATED COMPLETED TASKS HISTORY VIEW
     if (state.planningMode === 'completed') {
       root.innerHTML = `
         ${weekStripHtml}
+        ${activeDateBarHtml}
         ${toolbarHtml}
         <div class="completed-archive-card" style="margin-top:0">
           <div class="completed-archive-head" style="cursor:default">
@@ -4649,20 +4849,20 @@
               <span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:6px;background:var(--emerald-soft);color:var(--emerald);font-weight:900;font-size:13px">✓</span>
               <div>
                 <div style="font-size:13.5px;font-weight:800;color:var(--text-primary)">
-                  Previously Completed Tasks (${completed.length})
+                  Previously Completed Plans (${completed.length})
                 </div>
                 <div style="font-size:11px;color:var(--text-muted)">
-                  Tap the green ✓ or <strong>↺ Reopen</strong> on any item to move it back to active tasks
+                  Tap the green ✓ or <strong>↺ Reopen</strong> on any item to move it back to active plans
                 </div>
               </div>
             </div>
-            <button type="button" class="mini-chip" data-planning-mode="radar">← Back to 2×4 Matrix</button>
+            <button type="button" class="mini-chip" data-planning-mode="radar">← Back to Categories</button>
           </div>
           <div class="completed-archive-body" style="max-height:none">
             ${
               completed.length > 0
                 ? completed.map((it) => renderTickerRowHtml(it, now)).join('')
-                : `<div style="padding:28px;text-align:center;color:var(--text-muted)">No completed tasks yet. Check off any task in the 2×4 Matrix, Horizon Plan, or Tasks tab and it will be archived here.</div>`
+                : `<div style="padding:28px;text-align:center;color:var(--text-muted)">No completed plans yet. Check off any plan and it will be archived here.</div>`
             }
           </div>
         </div>
@@ -4675,27 +4875,23 @@
       const cols = [
         {
           id: 'today',
-          title: "1. Today's Focus & Ready",
-          sub: 'Execute or verify today',
-          accent: 'var(--emerald)'
+          title: 'Today',
+          sub: 'Execute or verify today'
         },
         {
           id: 'tomorrow',
-          title: '2. Tomorrow',
-          sub: 'Queued for tomorrow morning',
-          accent: 'var(--brass)'
+          title: 'Tomorrow',
+          sub: 'Planned for tomorrow'
         },
         {
           id: 'week',
-          title: '3. This Week & Active Holds',
-          sub: 'Scheduled checks & 2–7d timers',
-          accent: 'var(--steel)'
+          title: 'This Week & Holds',
+          sub: 'Upcoming dates & active timers'
         },
         {
           id: 'backlog',
-          title: '4. Backlog & Strategic Ideas',
-          sub: 'Parked concepts & personal goals',
-          accent: 'var(--text-muted)'
+          title: 'Someday & Ideas',
+          sub: 'Unscheduled plans & concepts'
         }
       ];
 
@@ -4716,7 +4912,7 @@
                 .map((it) => {
                   const cl = CLUSTERS.find((c) => c.id === it.category) || CLUSTERS[3];
                   const t = Number(it.matureAt || it.dueAt || 0);
-                  const isReady = (t > 0 && now >= t) || it.delegationStatus === 'done';
+                  const isReady = isReadyNowItem(it, now);
                   const steps = Array.isArray(it.checklist) ? it.checklist : [];
                   const doneSteps = steps.filter((s) => s.done).length;
                   const buMeta = BHFIRMS_BUS.find((b) => b.id === it.buId);
@@ -4740,11 +4936,13 @@
                           ${it.assigneeName ? `<span class="t-pill person">${esc(it.assigneeName)}</span>` : ''}
                           ${steps.length > 0 ? `<span class="t-pill steps tabular">${doneSteps}/${steps.length}</span>` : ''}
                           ${
-                            t > 0
-                              ? `<span class="t-pill ${isReady ? 'matured' : 'timer'} tabular">${
-                                  isReady ? 'Ready' : esc(formatCountdown(t, now))
+                            t > 0 && (t > now || isReady || (Boolean(it.hasAlarm) && now >= t))
+                              ? `<span class="t-pill ${isReady ? 'matured' : now >= t ? 'p1' : 'timer'} tabular">${
+                                  isReady ? 'Ready' : now >= t ? 'Due' : esc(formatCountdown(t, now))
                                 }</span>`
-                              : ''
+                              : it.planDate
+                                ? `<span class="t-pill tabular">${esc(formatIsoFriendly(it.planDate, false))}</span>`
+                                : ''
                           }
                         </div>
                         <div style="display:flex;align-items:center;gap:3px">
@@ -4763,7 +4961,7 @@
             : `<div style="padding:18px 12px;text-align:center;color:var(--text-muted);font-size:11.5px;border:1px dashed var(--border-subtle);border-radius:7px">${esc(col.sub)}</div>`;
 
           return `
-            <div class="horizon-col" style="border-top:3px solid ${col.accent}">
+            <div class="horizon-col">
               <div class="horizon-col-head">
                 <div>
                   <div class="horizon-col-title">${esc(col.title)}</div>
@@ -4771,9 +4969,9 @@
                 </div>
                 <span class="bento-count ${colItems.length ? 'active' : ''} tabular">${colItems.length}</span>
               </div>
-              <form class="bento-inline-form" data-inline-horizon-form="${col.id}" style="padding:6px 10px;border-top:none;border-bottom:1px solid var(--border-subtle)">
-                <input type="text" class="bento-inline-input" enterkeyhint="done" placeholder="+ Add to ${esc(col.title.replace(/^[0-9]+\.\s*/, ''))}…" required>
-                <button type="submit" class="bento-inline-btn">+ Add</button>
+              <form class="bento-inline-form" data-inline-horizon-form="${col.id}" style="padding:4px 0 6px 0;border-bottom:1px solid var(--border-subtle)">
+                <input type="text" class="bento-inline-input" enterkeyhint="done" placeholder="+ Add to ${esc(col.title)}…" required>
+                <button type="submit" class="bento-inline-btn">Add</button>
               </form>
               <div class="horizon-col-body">
                 ${cardsHtml}
@@ -4785,6 +4983,7 @@
 
       root.innerHTML = `
         ${weekStripHtml}
+        ${activeDateBarHtml}
         ${toolbarHtml}
         <div class="horizon-board-grid">
           ${colsHtml}
@@ -4797,12 +4996,12 @@
     // MODE C: 6-CARD BHFIRMS BUSINESS UNIT PORTFOLIO BOARD
     if (state.planningMode === 'bus') {
       const buCards = [
-        { id: 'hospitality', title: 'Hospitality & Resorts', sub: 'Blanca · La Una · Palms · Voile · Platinum', accent: '#3B82F6' },
-        { id: 'manufacturing', title: 'Manufacturing & Construction', sub: 'WTC · BBConstruction · Lions Transport', accent: '#C69D53' },
-        { id: 'trading', title: 'Trading Operations', sub: 'Korri Auto · Shacman Trucks & Parts', accent: '#10B981' },
-        { id: 'realestate_ins', title: 'Real Estate & Insurance', sub: 'Properties Portfolio · Insurance Brokerage', accent: '#8B5CF6' },
-        { id: 'holding', title: 'Bdeir Holding & Finance', sub: 'Corporate · Treasury · Payments · Tech', accent: '#F59E0B' },
-        { id: 'personal', title: 'Personal, Family & Ideas', sub: 'Home · Verify Checks · Strategic Concepts', accent: '#EC4899' }
+        { id: 'hospitality', title: 'Hospitality & Resorts', sub: 'Blanca · La Una · Palms · Voile · Platinum' },
+        { id: 'manufacturing', title: 'Manufacturing & Construction', sub: 'WTC · BBConstruction · Lions Transport' },
+        { id: 'trading', title: 'Trading Operations', sub: 'Korri Auto · Shacman Trucks & Parts' },
+        { id: 'realestate_ins', title: 'Real Estate & Insurance', sub: 'Properties Portfolio · Insurance Brokerage' },
+        { id: 'holding', title: 'Bdeir Holding & Finance', sub: 'Corporate · Treasury · Payments · Tech' },
+        { id: 'personal', title: 'Personal, Family & Ideas', sub: 'Home · Verify Checks · Strategic Concepts' }
       ];
 
       const cardsHtml = buCards
@@ -4819,10 +5018,10 @@
           const delCount = buItems.filter((r) => r.isDelegated).length;
 
           return `
-            <div class="bu-plan-card" style="border-top:3px solid ${bu.accent}">
+            <div class="bu-plan-card">
               <div class="bu-plan-head">
                 <div>
-                  <div style="font-size:13px;font-weight:800;color:var(--text-primary)">${esc(bu.title)}</div>
+                  <div style="font-size:13px;font-weight:700;color:var(--text-primary)">${esc(bu.title)}</div>
                   <div style="font-size:10.5px;color:var(--text-muted)">${esc(bu.sub)}</div>
                 </div>
                 <div style="display:flex;align-items:center;gap:4px">
@@ -4830,15 +5029,15 @@
                   <span class="bento-count ${buItems.length ? 'active' : ''} tabular">${buItems.length}</span>
                 </div>
               </div>
-              <form class="bento-inline-form" data-inline-bu-form="${bu.id}" style="padding:6px 10px;border-top:none;border-bottom:1px solid var(--border-subtle)">
-                <input type="text" class="bento-inline-input" enterkeyhint="done" placeholder="+ Add task for ${esc(bu.title.split('&')[0].trim())}…" required>
-                <button type="submit" class="bento-inline-btn">+ Add</button>
+              <form class="bento-inline-form" data-inline-bu-form="${bu.id}" style="padding:4px 0 6px 0;border-bottom:1px solid var(--border-subtle)">
+                <input type="text" class="bento-inline-input" enterkeyhint="done" placeholder="+ Add plan for ${esc(bu.title.split('&')[0].trim())}…" required>
+                <button type="submit" class="bento-inline-btn">Add</button>
               </form>
               <div class="bu-plan-body">
                 ${
                   buItems.length
                     ? buItems.map((it) => renderTickerRowHtml(it, now)).join('')
-                    : `<div style="padding:18px 10px;text-align:center;color:var(--text-muted);font-size:11.5px">No active items queued for ${esc(bu.title)}</div>`
+                    : `<div style="padding:18px 10px;text-align:center;color:var(--text-muted);font-size:11.5px">No active plans for ${esc(bu.title)}</div>`
                 }
               </div>
             </div>
@@ -4848,6 +5047,7 @@
 
       root.innerHTML = `
         ${weekStripHtml}
+        ${activeDateBarHtml}
         ${toolbarHtml}
         <div class="bu-board-grid">
           ${cardsHtml}
@@ -4892,6 +5092,7 @@
 
       root.innerHTML = `
         ${weekStripHtml}
+        ${activeDateBarHtml}
         ${toolbarHtml}
         <div class="view-filter-bar">
           <div class="horiz-pill-strip">
@@ -4899,7 +5100,7 @@
               All Active (${active.length})
             </button>
             <button type="button" class="filter-pill ${state.boardFilter === 'completed' ? 'active' : ''}" data-board-filter="completed">
-              ✓ Completed (${completed.length})
+              Completed (${completed.length})
             </button>
             ${CLUSTERS.map((c) => {
               const cnt = active.filter((r) => (r.category || 'work') === c.id).length;
@@ -4914,7 +5115,7 @@
         <div class="ticker-list">
           ${
             listHtml ||
-            `<div style="padding:28px;text-align:center;color:var(--text-muted)">No items in this cluster filter yet.</div>`
+            `<div style="padding:28px;text-align:center;color:var(--text-muted)">No plans in this category filter yet.</div>`
           }
         </div>
         ${state.boardFilter === 'all' ? buildCompletedArchiveSectionHtml(completed, now) : ''}
@@ -4922,33 +5123,7 @@
       return;
     }
 
-    // MODE A: UPGRADED 2X4 ARCHITECTURAL COMMAND MATRIX (RADAR)
-    const urgentHtml = urgentItems.length
-      ? `
-      <div class="radar-urgent-strip">
-        <strong style="font-size:11px;color:var(--emerald);flex-shrink:0;text-transform:uppercase;letter-spacing:0.05em">
-          Ready Now (${urgentItems.length})
-        </strong>
-        ${urgentItems
-          .slice(0, 6)
-          .map(
-            (u) => `
-          <div class="urgent-pill-item" data-open-workbench="${esc(u.id)}" style="cursor:pointer">
-            <button type="button" class="bento-micro-check" data-act="toggle-done" data-id="${esc(u.id)}" title="Complete">✓</button>
-            <span>${esc(u.title.slice(0, 42))}</span>
-            ${
-              u.delegationStatus === 'done'
-                ? `<span class="bento-micro-tag matured">✅ ${esc(u.assigneeName)} Done</span>`
-                : `<span class="bento-micro-tag matured">Ready</span>`
-            }
-          </div>
-        `
-          )
-          .join('')}
-      </div>
-    `
-      : '';
-
+    // MODE A: CALM 2X4 CATEGORY MATRIX
     const isMobileViewport = typeof window !== 'undefined' && window.innerWidth <= 720;
     const maxPreviewRows = isMobileViewport ? 8 : 5;
 
@@ -4958,12 +5133,7 @@
         if (!r || r.deleted) return false;
         if ((r.category || 'work') !== clusterId) return false;
         if (!r.completed) {
-          if (selDate === 'all') return true;
-          const rIso = itemIsoDate(r);
-          if (rIso === selDate) return true;
-          if (selDate === baseIso && !rIso && getEffectiveHorizon(r, now) === 'today') return true;
-          if (selDate === tomorrowIso && !rIso && r.horizon === 'tomorrow') return true;
-          return false;
+          return selDate === 'all' ? true : matchesPlanDateFilter(r, selDate, now);
         }
         return isRecentlyCompleted(r, now);
       });
@@ -4979,53 +5149,65 @@
     const tilesHtml = orderedClusters.map((c) => {
       const items = getClusterDisplayItems(c.id);
       const activeCount = items.filter((r) => !r.completed).length;
-      const maturedCount = items.filter((r) => {
-        if (r.completed) return false;
-        const t = Number(r.matureAt || r.dueAt || 0);
-        return (t > 0 && now >= t) || r.delegationStatus === 'done';
-      }).length;
-
-      const tileCls = ['bento-tile', maturedCount > 0 ? 'has-matured' : '']
+      const isComposerOpen = state.activeInlineClusterId === c.id;
+      const tileCls = ['bento-tile', items.length === 0 ? 'is-empty-mobile' : '']
         .filter(Boolean)
         .join(' ');
 
       const topRows = items.slice(0, maxPreviewRows).map((it) => {
         const isChecked = Boolean(it.completed);
         const t = Number(it.matureAt || it.dueAt || 0);
-        const isReady = !isChecked && ((t > 0 && now >= t) || it.delegationStatus === 'done');
+        const isReady = !isChecked && isReadyNowItem(it, now);
         const steps = Array.isArray(it.checklist) ? it.checklist : [];
         const doneSteps = steps.filter((s) => s.done).length;
+        const buMeta = BHFIRMS_BUS.find((b) => b.id === it.buId);
+        const rIso = itemIsoDate(it);
         const priDot =
           !isChecked && it.priority === 'p1'
             ? `<span style="width:6px;height:6px;border-radius:50%;background:var(--crimson);flex-shrink:0" title="P1 Critical"></span>`
             : !isChecked && it.priority === 'p2'
               ? `<span style="width:6px;height:6px;border-radius:50%;background:var(--amber);flex-shrink:0" title="P2 High"></span>`
               : '';
-        const tagTxt = isChecked
-          ? '✓ Done'
-          : it.assigneeName
-            ? `${it.assigneeName}`
-            : steps.length > 0
-              ? `${doneSteps}/${steps.length}`
-              : t > 0
-                ? formatCountdown(t, now)
-                : it.subTag
-                  ? it.subTag.replace(/^[^\w]+/, '').trim().slice(0, 10)
-                  : '';
+
+        let tagTxt = '';
+        let tagCls = '';
+        if (isChecked) {
+          tagTxt = '✓ Done';
+          tagCls = 'matured';
+        } else if (it.delegationStatus === 'done') {
+          tagTxt = 'Verify';
+          tagCls = 'matured';
+        } else if (isReady) {
+          tagTxt = 'Ready';
+          tagCls = 'matured';
+        } else if (it.assigneeName) {
+          tagTxt = it.assigneeName;
+          tagCls = 'person';
+        } else if (steps.length > 0) {
+          tagTxt = `${doneSteps}/${steps.length}`;
+        } else if (t > now) {
+          tagTxt = formatCountdown(t, now);
+          tagCls = 'timer';
+        } else if (rIso && rIso > baseIso) {
+          tagTxt = rIso === shiftIsoDate(baseIso, 1) ? 'Tomorrow' : formatIsoFriendly(rIso, false);
+        } else if (buMeta) {
+          tagTxt = buMeta.short;
+        }
+
         return `
-          <div class="bento-micro-row ${isChecked ? 'is-checked' : ''}" data-open-workbench="${esc(it.id)}" title="Tap ✓ to complete or tap title to open Task Workbench">
+          <div class="bento-micro-row ${isChecked ? 'is-checked' : ''}" data-open-workbench="${esc(it.id)}" title="Tap circle to complete or tap title to edit">
             <button
               type="button"
               class="bento-micro-check ${isChecked ? 'checked' : ''}"
               data-act="toggle-done"
               data-id="${esc(it.id)}"
-              title="${isChecked ? 'Undo complete' : 'Complete now'}"
+              title="${isChecked ? 'Undo complete' : 'Complete'}"
             >✓</button>
             ${priDot}
             <span class="bento-micro-text">${esc(it.title)}</span>
             ${
               tagTxt
-                ? `<span class="bento-micro-tag ${isReady || isChecked ? 'matured' : ''} tabular">${esc(tagTxt)}</span>`
+                ? `<span class="bento-micro-tag ${tagCls} tabular">${esc(tagTxt)}</span>`
                 : ''
             }
           </div>
@@ -5034,52 +5216,56 @@
 
       const emptyStateHtml = `
         <div class="bento-empty">
-          <div class="bento-empty-top">
-            <span>${esc(c.sub)}</span>
-            <span style="font-family:var(--font-mono);font-size:10px;opacity:0.7">0 queued</span>
-          </div>
+          <div class="bento-empty-desc">${esc(c.sub)}</div>
           ${
-            Array.isArray(c.templates) && c.templates.length > 0
-              ? `
-            <div class="bento-empty-templates">
-              ${c.templates
-                .map(
-                  (tpl) => `
-                <button
-                  type="button"
-                  class="bento-template-chip"
-                  data-template-cluster="${c.id}"
-                  data-template-text="${esc(tpl)}"
-                  title="Click to prefill '${esc(tpl)}'"
-                >+ ${esc(tpl)}</button>
-              `
-                )
-                .join('')}
-            </div>
-          `
+            !isComposerOpen
+              ? `<button type="button" class="bento-empty-add-btn" data-toggle-card-add="${c.id}">+ Add plan</button>`
               : ''
           }
         </div>
       `;
 
+      const composerHtml = isComposerOpen
+        ? `
+          <div class="bento-card-composer">
+            <form class="bento-inline-form" data-inline-cluster-form="${c.id}">
+              <input
+                type="text"
+                class="bento-inline-input"
+                enterkeyhint="done"
+                name="inlineTitle"
+                data-card-inline-input="${c.id}"
+                placeholder="Add plan to ${esc(c.shortLabel)}… (Enter to save)"
+                autocomplete="off"
+              >
+              <button type="submit" class="bento-inline-btn">Add</button>
+              <button type="button" class="bento-inline-btn ghost" data-card-open-details="${c.id}" title="Open full composer with date, time & checklist">Details</button>
+              <button type="button" class="bento-inline-btn ghost" data-close-card-add="${c.id}" aria-label="Close" style="padding:0 7px">✕</button>
+            </form>
+          </div>
+        `
+        : '';
+
       const svgIcon = CLUSTER_SVGS[c.id] || c.icon;
 
       return `
         <div class="${tileCls}" data-cluster-id="${c.id}">
-          <div class="bento-head" data-open-cluster="${c.id}" style="cursor:pointer" title="Click header to open full ${esc(c.label)} sheet">
-            <div class="bento-title-wrap">
+          <div class="bento-head">
+            <div class="bento-title-wrap" data-open-cluster="${c.id}" title="View all ${esc(c.label)} items">
               <span class="bento-icon">${svgIcon}</span>
-              <div>
-                <div class="bento-title">${esc(isMobileViewport ? c.shortLabel : c.label)}</div>
-              </div>
+              <div class="bento-title">${esc(isMobileViewport ? c.shortLabel : c.label)}</div>
             </div>
             <div class="bento-count-wrap">
-              ${
-                maturedCount > 0
-                  ? `<span class="bento-count matured tabular">${maturedCount} ready</span>`
-                  : ''
-              }
               <span class="bento-count ${activeCount ? 'active' : ''} tabular">${activeCount}</span>
+              <button
+                type="button"
+                class="bento-add-icon-btn ${isComposerOpen ? 'is-open' : ''}"
+                data-toggle-card-add="${c.id}"
+                title="Add plan to ${esc(c.label)}"
+                aria-label="Add plan to ${esc(c.label)}"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+              </button>
             </div>
           </div>
 
@@ -5087,30 +5273,20 @@
             ${topRows.length ? topRows.join('') : emptyStateHtml}
             ${
               items.length > maxPreviewRows
-                ? `<button type="button" class="mini-chip" data-open-cluster="${c.id}" style="align-self:flex-start;font-size:10.5px">+${items.length - maxPreviewRows} more in ${esc(c.shortLabel)} →</button>`
+                ? `<button type="button" class="mini-chip" data-open-cluster="${c.id}" style="align-self:flex-start;font-size:10.5px;margin-top:4px">+${items.length - maxPreviewRows} more →</button>`
                 : ''
             }
           </div>
 
-          <form class="bento-inline-form" data-inline-cluster-form="${c.id}">
-            <input
-              type="text"
-              class="bento-inline-input"
-              enterkeyhint="done"
-              name="inlineTitle"
-              placeholder="+ Add to ${esc(c.shortLabel)}…"
-              autocomplete="off"
-            >
-            <button type="submit" class="bento-inline-btn">Add</button>
-          </form>
+          ${composerHtml}
         </div>
       `;
     }).join('');
 
     root.innerHTML = `
       ${weekStripHtml}
+      ${activeDateBarHtml}
       ${toolbarHtml}
-      ${urgentHtml}
       <div class="bento-radar-grid">
         ${tilesHtml}
       </div>
@@ -5142,8 +5318,10 @@
 
   function isReadyNowItem(r, now = Date.now()) {
     if (!r || r.completed || r.deleted) return false;
+    if (r.delegationStatus === 'done') return true;
+    if (!isHoldOrTimerRecord(r)) return false;
     const t = Number(r.matureAt || r.dueAt || 0);
-    return (t > 0 && now >= t) || r.delegationStatus === 'done';
+    return t > 0 && now >= t;
   }
 
   function isActionTaskItem(r) {
@@ -5274,7 +5452,7 @@
   function renderDelegatedCardHtml(it, now = Date.now()) {
     const buMeta = BHFIRMS_BUS.find((b) => b.id === it.buId);
     const t = Number(it.dueAt || it.matureAt || 0);
-    const isOverdue = t > 0 && now > t && it.delegationStatus !== 'done';
+    const isOverdue = Boolean(it.hasAlarm) && t > 0 && now > t && it.delegationStatus !== 'done';
     const steps = Array.isArray(it.checklist) ? it.checklist : [];
     const doneSteps = steps.filter((s) => s.done).length;
     const curStage = it.delegationStatus || 'assigned';
@@ -5289,11 +5467,13 @@
             ${steps.length > 0 ? `<span class="t-pill steps tabular">${doneSteps}/${steps.length} steps</span>` : ''}
           </div>
           ${
-            t > 0
+            t > 0 && (t > now || isOverdue)
               ? `<span class="t-pill ${isOverdue ? 'p1' : 'timer'} tabular">${
-                  isOverdue ? 'Overdue' : esc(formatCountdown(t, now))
+                  isOverdue ? 'Due' : esc(formatCountdown(t, now))
                 }</span>`
-              : ''
+              : it.planDate
+                ? `<span class="t-pill tabular">${esc(formatIsoFriendly(it.planDate, false))}</span>`
+                : ''
           }
         </div>
 
@@ -5583,7 +5763,7 @@
       const colsHtml = stages
         .map(
           (st) => `
-        <div class="del-stage-col" style="border-top:3px solid ${st.accent}">
+        <div class="del-stage-col">
           <div class="del-stage-head">
             <div>
               <div class="del-stage-title">${esc(st.title)}</div>
@@ -6102,6 +6282,7 @@
   function openClusterSheet(clusterId) {
     state.openClusterSheetId = clusterId;
     state.openSheetKind = 'cluster';
+    document.getElementById('sheet-dialog')?.classList.remove('is-composer-sheet');
     const cluster = CLUSTERS.find((c) => c.id === clusterId) || CLUSTERS[0];
     const backdrop = document.getElementById('sheet-backdrop');
     const titleWrap = document.getElementById('sheet-title-wrap');
@@ -6119,10 +6300,11 @@
           Number(b.completedAt || b.updatedAt || b.createdAt || 0) -
           Number(a.completedAt || a.updatedAt || a.createdAt || 0)
       );
+    const svgIcon = CLUSTER_SVGS[cluster.id] || cluster.icon;
 
     titleWrap.innerHTML = `
-      <div style="display:flex;align-items:center;gap:8px">
-        <span style="font-size:18px">${cluster.icon}</span>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="bento-icon">${svgIcon}</span>
         <div>
           <strong style="font-size:15px">${esc(cluster.label)} (${items.length} active${completedInCluster.length ? ` · ${completedInCluster.length} done` : ''})</strong>
           <div style="font-size:11px;color:var(--text-muted)">${esc(cluster.sub)}</div>
@@ -6131,16 +6313,17 @@
     `;
 
     body.innerHTML = `
-      <div style="display:flex;gap:6px">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
         <input
           type="text"
           id="sheet-quick-input"
           enterkeyhint="done"
           class="capture-input"
-          style="padding:8px 10px;border-radius:9px;background:var(--bg-card);border:1px solid var(--border-strong)"
-          placeholder="Quick add to ${esc(cluster.shortLabel)}…"
+          style="flex:1;min-width:180px;padding:8px 10px;border-radius:9px;background:var(--bg-card);border:1px solid var(--border-strong)"
+          placeholder="Add plan to ${esc(cluster.shortLabel)}… (Enter to save)"
         >
-        <button type="button" class="capture-submit-btn" id="sheet-quick-add" data-cluster="${cluster.id}">+ Add</button>
+        <button type="button" class="capture-submit-btn" id="sheet-quick-add" data-cluster="${cluster.id}">Add</button>
+        <button type="button" class="capture-details-btn" data-open-new-plan-cluster="${cluster.id}">+ Details</button>
       </div>
       <div class="ticker-list" style="max-height:62vh">
         ${
@@ -6220,6 +6403,7 @@
     state.rosterSheetOpts = opts;
     state.openClusterSheetId = '';
     state.openSheetKind = 'roster';
+    document.getElementById('sheet-dialog')?.classList.remove('is-composer-sheet');
 
     const existingTask = opts.existingTaskId
       ? state.reminders.find((r) => r.id === opts.existingTaskId)
@@ -6483,7 +6667,524 @@
     state.openClusterSheetId = '';
     state.openTaskWorkbenchId = '';
     state.openSheetKind = '';
+    state.newPlanForm = null;
+    document.getElementById('sheet-dialog')?.classList.remove('is-composer-sheet');
     if (backdrop) backdrop.hidden = true;
+  }
+
+  function syncNewPlanDomFieldsToState() {
+    const f = state.newPlanForm;
+    if (!f) return;
+    const tEl = document.getElementById('np-title');
+    if (tEl) f.title = tEl.value;
+    const dEl = document.getElementById('np-plan-date');
+    if (dEl) f.planDate = dEl.value;
+    const tmEl = document.getElementById('np-plan-time');
+    if (tmEl) f.planTime = tmEl.value;
+    const recEl = document.getElementById('np-recur');
+    if (recEl) f.recur = recEl.value;
+    const priEl = document.getElementById('np-priority');
+    if (priEl) f.priority = priEl.value;
+    const buEl = document.getElementById('np-bu');
+    if (buEl) f.buId = buEl.value;
+    const asgEl = document.getElementById('np-assignee');
+    if (asgEl) f.assigneeName = asgEl.value;
+    const ntEl = document.getElementById('np-notes');
+    if (ntEl) f.notes = ntEl.value;
+    const stEl = document.getElementById('np-step-input');
+    if (stEl) f.pendingStep = stEl.value;
+  }
+
+  function renderNewPlanSheetBody(focusSelector = '') {
+    const f = state.newPlanForm;
+    const body = document.getElementById('sheet-body');
+    const titleWrap = document.getElementById('sheet-title-wrap');
+    if (!f || !body || !titleWrap) return;
+
+    titleWrap.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%">
+        <div>
+          <strong style="font-size:15.5px">New Plan</strong>
+          <div style="font-size:11.5px;color:var(--text-muted)">Set when, category &amp; optional checklist — or use <strong>+ Save &amp; Add Another</strong> for multiple plans</div>
+        </div>
+      </div>
+    `;
+
+    const baseIso = todayIso();
+    const tomIso = shiftIsoDate(baseIso, 1);
+    const whenPills = [
+      { k: 'today', lbl: 'Today' },
+      { k: 'tomorrow', lbl: 'Tomorrow' },
+      { k: 'week', lbl: 'This Week' },
+      { k: 'date', lbl: 'Pick Date' },
+      { k: 'timer', lbl: 'Wait Timer' },
+      { k: 'backlog', lbl: 'Someday' }
+    ];
+
+    const holdPills = [
+      { k: '3h', lbl: '+3 Hours' },
+      { k: '1d', lbl: '+24 Hours' },
+      { k: '2d', lbl: '+2 Days' },
+      { k: '5d', lbl: '+5 Days (Shipping)' },
+      { k: '7d', lbl: '+7 Days' }
+    ];
+
+    let scheduleDetailHtml = '';
+    if (f.whenMode === 'timer') {
+      scheduleDetailHtml = `
+        <div class="np-when-pills" style="margin-top:4px">
+          ${holdPills
+            .map(
+              (hp) => `
+            <button type="button" class="mini-chip ${f.holdChoice === hp.k ? 'active' : ''}" data-np-hold="${hp.k}">
+              ${esc(hp.lbl)}
+            </button>
+          `
+            )
+            .join('')}
+        </div>
+      `;
+    } else if (f.whenMode === 'backlog') {
+      scheduleDetailHtml = `
+        <div style="font-size:11.5px;color:var(--text-muted);padding:4px 2px">
+          Saved to Someday / Ideas with no date or alarm until you schedule it.
+        </div>
+      `;
+    } else {
+      const effectiveIso =
+        f.planDate ||
+        (f.whenMode === 'tomorrow' ? tomIso : f.whenMode === 'week' ? shiftIsoDate(baseIso, 3) : baseIso);
+      scheduleDetailHtml = `
+        <div class="np-datetime-grid">
+          <div class="np-field-wrap">
+            <label class="np-sublabel" for="np-plan-date">Date</label>
+            <input type="date" id="np-plan-date" class="np-input" value="${esc(effectiveIso)}">
+          </div>
+          <div class="np-field-wrap">
+            <label class="np-sublabel" for="np-plan-time">Reminder Time (Optional)</label>
+            <input type="time" id="np-plan-time" class="np-input" value="${esc(f.planTime || '')}">
+          </div>
+          <div class="np-field-wrap">
+            <label class="np-sublabel" for="np-recur">Repeat</label>
+            <select id="np-recur" class="np-input">
+              <option value="none" ${(!f.recur || f.recur === 'none') ? 'selected' : ''}>One-time</option>
+              <option value="daily" ${f.recur === 'daily' ? 'selected' : ''}>Daily</option>
+              <option value="weekly" ${f.recur === 'weekly' ? 'selected' : ''}>Weekly</option>
+            </select>
+          </div>
+        </div>
+      `;
+    }
+
+    const activeClusterId = f.clusterId || detectCluster(f.title || '', '').id;
+    const steps = Array.isArray(f.checklist) ? f.checklist : [];
+    const hasAssignee = Boolean(String(f.assigneeName || '').trim());
+
+    body.innerHTML = `
+      <form id="new-plan-form" class="np-form" autocomplete="off">
+        <div class="np-section">
+          <label class="np-label" for="np-title">
+            <span>What are you planning?</span>
+          </label>
+          <input
+            type="text"
+            id="np-title"
+            class="np-title-input"
+            value="${esc(f.title || '')}"
+            placeholder="e.g. Review Q4 plant maintenance, Order spare parts, Weekend trip…"
+            required
+          >
+        </div>
+
+        <div class="np-section">
+          <div class="np-label">
+            <span>When</span>
+            <span id="np-when-summary" style="text-transform:none;letter-spacing:0;font-weight:600;color:var(--text-secondary)">
+              ${
+                f.whenMode === 'backlog'
+                  ? 'Someday (unscheduled)'
+                  : f.whenMode === 'timer'
+                    ? 'Active countdown timer'
+                    : esc(formatIsoFriendly(f.planDate || baseIso, true))
+              }
+            </span>
+          </div>
+          <div class="np-when-pills">
+            ${whenPills
+              .map(
+                (wp) => `
+              <button type="button" class="np-pill-btn ${f.whenMode === wp.k ? 'active' : ''}" data-np-when="${wp.k}">
+                ${esc(wp.lbl)}
+              </button>
+            `
+              )
+              .join('')}
+          </div>
+          ${scheduleDetailHtml}
+        </div>
+
+        <div class="np-section">
+          <div class="np-label">
+            <span>Category</span>
+            <span id="np-cat-hint" style="text-transform:none;letter-spacing:0;font-weight:500">${
+              f.manualCluster ? 'Selected' : 'Auto-detected as you type'
+            }</span>
+          </div>
+          <div class="np-cat-grid">
+            ${CLUSTERS.map((c) => {
+              const svg = CLUSTER_SVGS[c.id] || '';
+              return `
+                <button
+                  type="button"
+                  class="np-cat-btn ${activeClusterId === c.id ? 'active' : ''}"
+                  data-np-cat="${c.id}"
+                >
+                  ${svg}
+                  <span>${esc(c.shortLabel)}</span>
+                </button>
+              `;
+            }).join('')}
+          </div>
+        </div>
+
+        <div class="np-section">
+          <div class="np-label">
+            <span>Checklist Steps (Optional)</span>
+            <span style="text-transform:none;letter-spacing:0;font-weight:500">${steps.length} step${steps.length === 1 ? '' : 's'}</span>
+          </div>
+          <div class="checklist-drawer-box" style="background:var(--bg-subtle)">
+            ${steps
+              .map(
+                (st, idx) => `
+              <div class="checklist-step-row">
+                <span class="checklist-step-check" style="font-size:9px;color:var(--text-muted)">${idx + 1}</span>
+                <span style="flex:1">${esc(st.text)}</span>
+                <button type="button" class="mini-chip" data-np-del-step="${idx}" style="padding:1px 6px;font-size:10px" title="Remove step">✕</button>
+              </div>
+            `
+              )
+              .join('')}
+            <div style="display:flex;gap:6px">
+              <input
+                type="text"
+                id="np-step-input"
+                class="bento-inline-input"
+                enterkeyhint="done"
+                value="${esc(f.pendingStep || '')}"
+                placeholder="+ Type a step and press Enter…"
+              >
+              <button type="button" class="bento-inline-btn ghost" id="btn-np-add-step">+ Add</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="np-section">
+          <div class="np-label"><span>Details &amp; Delegation (Optional)</span></div>
+          <div class="np-meta-grid-3">
+            <div class="np-field-wrap">
+              <label class="np-sublabel" for="np-priority">Priority</label>
+              <select id="np-priority" class="np-input">
+                <option value="p3" ${(!f.priority || f.priority === 'p3') ? 'selected' : ''}>Normal</option>
+                <option value="p2" ${f.priority === 'p2' ? 'selected' : ''}>P2 · High</option>
+                <option value="p1" ${f.priority === 'p1' ? 'selected' : ''}>P1 · Critical</option>
+              </select>
+            </div>
+            <div class="np-field-wrap">
+              <label class="np-sublabel" for="np-bu">Business Unit</label>
+              <select id="np-bu" class="np-input">
+                <option value="">Personal / General</option>
+                ${BHFIRMS_BUS.map(
+                  (b) => `<option value="${b.id}" ${f.buId === b.id ? 'selected' : ''}>${esc(b.short)}</option>`
+                ).join('')}
+              </select>
+            </div>
+            <div class="np-field-wrap">
+              <label class="np-sublabel" for="np-assignee">Delegate To (@Staff)</label>
+              <input
+                type="text"
+                id="np-assignee"
+                class="np-input"
+                value="${esc(f.assigneeName || '')}"
+                placeholder="Just me (or type name)"
+              >
+            </div>
+          </div>
+          ${
+            state.teamRoster.length > 0
+              ? `
+            <div class="horiz-pill-strip" style="padding-top:2px">
+              <span style="font-size:10.5px;color:var(--text-muted);flex-shrink:0">Team:</span>
+              ${state.teamRoster
+                .map(
+                  (m) => `
+                <button type="button" class="mini-chip ${(f.assigneeName || '').toLowerCase() === m.name.toLowerCase() ? 'active' : ''}" data-np-pick-person="${esc(m.name)}" data-np-pick-bu="${esc(m.bu || '')}">
+                  ${esc(m.name)}
+                </button>
+              `
+                )
+                .join('')}
+            </div>
+          `
+              : ''
+          }
+          <textarea
+            id="np-notes"
+            class="np-input"
+            rows="2"
+            placeholder="Optional notes, links, amounts, or context…"
+            style="margin-top:2px"
+          >${esc(f.notes || '')}</textarea>
+        </div>
+
+        <div class="np-footer">
+          <button type="button" class="np-btn-secondary" data-np-cancel="1">Cancel</button>
+          <div class="np-footer-right">
+            <button type="submit" class="np-btn-secondary" data-np-submit="another" title="Save this plan and immediately add another one">
+              + Save &amp; Add Another
+            </button>
+            <button
+              type="submit"
+              id="btn-np-submit-wa"
+              class="delegate-btn-wa"
+              data-np-submit="whatsapp"
+              style="padding:8.5px 13px;border-radius:8px;font-size:12px;font-weight:700;${hasAssignee ? '' : 'display:none'}"
+            >
+              📲 Assign &amp; WhatsApp
+            </button>
+            <button type="submit" class="np-btn-primary" data-np-submit="save">
+              Add Plan
+            </button>
+          </div>
+        </div>
+      </form>
+    `;
+
+    if (focusSelector) {
+      setTimeout(() => {
+        const el = document.querySelector(focusSelector);
+        if (el && typeof el.focus === 'function') {
+          el.focus();
+          if (focusSelector === '#np-plan-date' && typeof el.showPicker === 'function') {
+            try { el.showPicker(); } catch {}
+          }
+        }
+      }, 25);
+    }
+  }
+
+  function openNewPlanSheet(prefillOpts = {}) {
+    const backdrop = document.getElementById('sheet-backdrop');
+    const dialog = document.getElementById('sheet-dialog');
+    if (!backdrop) return;
+
+    state.openClusterSheetId = '';
+    state.openTaskWorkbenchId = '';
+    state.openSheetKind = 'new_plan';
+    dialog?.classList.add('is-composer-sheet');
+
+    const baseIso = todayIso();
+    const tomIso = shiftIsoDate(baseIso, 1);
+    const selIso =
+      state.selectedPlanDate && state.selectedPlanDate !== 'all' ? state.selectedPlanDate : '';
+
+    const capVal = document.getElementById('capture-input')?.value?.trim() || '';
+    const initTitle =
+      prefillOpts.title !== undefined
+        ? String(prefillOpts.title)
+        : prefillOpts.fromDraft || capVal
+          ? capVal || state.draft.text || ''
+          : '';
+
+    const draftCatSel = document.getElementById('draft-cluster-select')?.value || state.draft.clusterOverride || '';
+    const manualCluster = Boolean(prefillOpts.manualCluster || prefillOpts.clusterId || draftCatSel);
+    const clusterId =
+      prefillOpts.clusterId ||
+      draftCatSel ||
+      detectCluster(initTitle, '').id;
+
+    let whenMode = prefillOpts.whenMode || '';
+    let planDate = prefillOpts.planDate || '';
+    let holdChoice = '1d';
+
+    if (!whenMode) {
+      const draftWhen = document.getElementById('draft-when-select')?.value || state.draft.whenSelect || 'auto';
+      if (draftWhen === 'tomorrow') {
+        whenMode = 'tomorrow';
+        planDate = tomIso;
+      } else if (draftWhen === 'week') {
+        whenMode = 'week';
+        planDate = shiftIsoDate(baseIso, 3);
+      } else if (draftWhen === 'backlog') {
+        whenMode = 'backlog';
+        planDate = '';
+      } else if (draftWhen === '1d' || draftWhen === '5d') {
+        whenMode = 'timer';
+        holdChoice = draftWhen;
+      } else if (selIso) {
+        whenMode = selIso === baseIso ? 'today' : selIso === tomIso ? 'tomorrow' : 'date';
+        planDate = selIso;
+      } else if (clusterId === 'ideas' || clusterId === 'want_to_do') {
+        whenMode = 'backlog';
+        planDate = '';
+      } else {
+        whenMode = 'today';
+        planDate = baseIso;
+      }
+    } else if (!planDate && whenMode !== 'backlog' && whenMode !== 'timer') {
+      planDate =
+        whenMode === 'tomorrow'
+          ? tomIso
+          : whenMode === 'week'
+            ? shiftIsoDate(baseIso, 3)
+            : baseIso;
+    }
+
+    const ctx = extractSmartContext(initTitle);
+
+    state.newPlanForm = {
+      title: initTitle,
+      whenMode,
+      planDate,
+      planTime: prefillOpts.planTime || '',
+      holdChoice,
+      recur: prefillOpts.recur || state.draft.recur || 'none',
+      clusterId,
+      manualCluster,
+      priority: prefillOpts.priority || state.draft.priority || ctx.priority || 'p3',
+      buId: prefillOpts.buId || state.draft.assigneeBu || ctx.buId || '',
+      assigneeName: prefillOpts.assigneeName || state.draft.assigneeName || ctx.assigneeName || '',
+      notes: prefillOpts.notes || state.draft.notes || '',
+      checklist: Array.isArray(prefillOpts.checklist)
+        ? [...prefillOpts.checklist]
+        : parseChecklistStepsFromText(state.draft.checklistRaw || ''),
+      pendingStep: ''
+    };
+
+    backdrop.hidden = false;
+    renderNewPlanSheetBody(prefillOpts.focusDate ? '#np-plan-date' : '#np-title');
+  }
+
+  async function submitNewPlanForm(submitMode = 'save') {
+    syncNewPlanDomFieldsToState();
+    const f = state.newPlanForm;
+    if (!f) return;
+    const rawTitle = String(f.title || '').trim();
+    if (!rawTitle) {
+      showToast('Enter what you are planning first');
+      document.getElementById('np-title')?.focus();
+      return;
+    }
+
+    const steps = Array.isArray(f.checklist) ? [...f.checklist] : [];
+    const pending = String(f.pendingStep || '').trim();
+    if (pending) {
+      steps.push({
+        id: `st_${Date.now().toString(36)}_${steps.length}`,
+        text: pending,
+        done: false
+      });
+    }
+
+    const baseIso = todayIso();
+    const tomIso = shiftIsoDate(baseIso, 1);
+    const chosenCluster = f.manualCluster
+      ? f.clusterId || 'work'
+      : detectCluster(rawTitle, '').id;
+
+    let explicitTiming = null;
+    let horizon = 'today';
+
+    if (f.whenMode === 'backlog') {
+      explicitTiming = {
+        targetAt: 0,
+        planDate: '',
+        hasAlarm: false,
+        label: 'Someday',
+        isHold: false,
+        horizon: 'backlog',
+        recur: 'none'
+      };
+      horizon = 'backlog';
+    } else if (f.whenMode === 'timer') {
+      const ctx = extractSmartContext(rawTitle);
+      explicitTiming = resolveTimingFromChoice(
+        f.holdChoice || '1d',
+        rawTitle,
+        chosenCluster,
+        ctx.amount,
+        ''
+      );
+      horizon = explicitTiming.horizon || 'tomorrow';
+    } else {
+      const targetIso =
+        f.planDate && /^\d{4}-\d{2}-\d{2}$/.test(f.planDate)
+          ? f.planDate
+          : f.whenMode === 'tomorrow'
+            ? tomIso
+            : f.whenMode === 'week'
+              ? shiftIsoDate(baseIso, 3)
+              : baseIso;
+      horizon = horizonFromIso(targetIso);
+      let targetAt = 0;
+      let hasAlarm = false;
+      if (f.planTime && /^\d{1,2}:\d{2}$/.test(f.planTime)) {
+        const [yy, mm, dd] = targetIso.split('-').map(Number);
+        const [hh, mi] = f.planTime.split(':').map(Number);
+        targetAt = new Date(yy, mm - 1, dd, hh, mi, 0, 0).getTime();
+        hasAlarm = true;
+      } else if (f.recur === 'daily' || f.recur === 'weekly') {
+        const [yy, mm, dd] = targetIso.split('-').map(Number);
+        targetAt = new Date(yy, mm - 1, dd, 9, 0, 0, 0).getTime();
+        hasAlarm = true;
+      }
+      explicitTiming = {
+        targetAt,
+        planDate: targetIso,
+        hasAlarm,
+        label: formatIsoFriendly(targetIso, false),
+        isHold: isHoldOrTimerCategory(chosenCluster) && targetAt > 0,
+        horizon,
+        recur: f.recur || 'none'
+      };
+    }
+
+    // Clear top draft if it was prefilled into the modal
+    state.draft.text = '';
+    state.draft.notes = '';
+    state.draft.checklistRaw = '';
+    const capInp = document.getElementById('capture-input');
+    if (capInp) capInp.value = '';
+
+    await addQuickInlineTask({
+      title: rawTitle,
+      clusterId: chosenCluster,
+      horizon,
+      explicitTiming,
+      priority: f.priority || 'p3',
+      buId: f.buId || '',
+      assigneeName: String(f.assigneeName || '').trim(),
+      notes: f.notes || '',
+      checklist: steps,
+      sendWhatsApp: submitMode === 'whatsapp',
+      silentToast: submitMode === 'another'
+    });
+
+    if (submitMode === 'another') {
+      state.newPlanForm = {
+        ...f,
+        title: '',
+        planTime: '',
+        notes: '',
+        checklist: [],
+        pendingStep: ''
+      };
+      renderNewPlanSheetBody('#np-title');
+      showToast('✓ Saved! Add your next plan');
+      return;
+    }
+
+    closeActiveSheet();
+    renderAll();
   }
 
   function openTaskWorkbenchSheet(taskId) {
@@ -6492,6 +7193,7 @@
     state.openClusterSheetId = '';
     state.openTaskWorkbenchId = taskId;
     state.openSheetKind = 'workbench';
+    document.getElementById('sheet-dialog')?.classList.add('is-composer-sheet');
 
     const backdrop = document.getElementById('sheet-backdrop');
     const titleWrap = document.getElementById('sheet-title-wrap');
@@ -6502,18 +7204,19 @@
     const steps = Array.isArray(item.checklist) ? item.checklist : [];
     const doneSteps = steps.filter((s) => s.done).length;
     const targetAt = Number(item.dueAt || item.matureAt || 0);
-    let dtLocalVal = '';
-    if (targetAt > 0) {
+    const planDateVal = itemIsoDate(item);
+    let planTimeVal = '';
+    if (targetAt > 0 && (item.hasAlarm || isHoldOrTimerRecord(item))) {
       const d = new Date(targetAt);
       const pad = (n) => String(n).padStart(2, '0');
-      dtLocalVal = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      planTimeVal = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
     }
 
     titleWrap.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%">
         <div>
-          <strong style="font-size:15px">Executive Task Workbench</strong>
-          <div style="font-size:11px;color:var(--text-muted)">${esc(cluster.label)} · Plan horizon, deliverable steps &amp; delegation</div>
+          <strong style="font-size:15px">Edit Plan</strong>
+          <div style="font-size:11px;color:var(--text-muted)">${esc(cluster.label)} · Schedule, checklist steps &amp; delegation</div>
         </div>
       </div>
     `;
@@ -6523,34 +7226,46 @@
         <input type="hidden" id="wb-task-id" value="${esc(item.id)}">
 
         <div>
-          <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Task Title</label>
+          <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Plan Title</label>
           <input type="text" id="wb-title" class="roster-field" value="${esc(item.title)}" required style="margin-top:4px;font-weight:700">
         </div>
 
         <div class="roster-form-grid-2">
           <div>
-            <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Planning Horizon</label>
+            <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Planned Date</label>
+            <input type="date" id="wb-plan-date" class="roster-field" value="${esc(planDateVal)}" style="margin-top:4px;width:100%">
+          </div>
+
+          <div>
+            <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Reminder Time (Optional)</label>
+            <input type="time" id="wb-plan-time" class="roster-field" value="${esc(planTimeVal)}" style="margin-top:4px;width:100%">
+          </div>
+        </div>
+
+        <div class="roster-form-grid-2">
+          <div>
+            <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Timeline Bucket</label>
             <select id="wb-horizon" class="roster-field" style="margin-top:4px;width:100%">
-              <option value="today" ${(item.horizon || 'today') === 'today' ? 'selected' : ''}>1. Today's Focus</option>
-              <option value="tomorrow" ${item.horizon === 'tomorrow' ? 'selected' : ''}>2. Tomorrow</option>
-              <option value="week" ${item.horizon === 'week' ? 'selected' : ''}>3. This Week &amp; Holds</option>
-              <option value="backlog" ${item.horizon === 'backlog' ? 'selected' : ''}>4. Backlog / Ideas</option>
+              <option value="today" ${(item.horizon || 'today') === 'today' ? 'selected' : ''}>Today</option>
+              <option value="tomorrow" ${item.horizon === 'tomorrow' ? 'selected' : ''}>Tomorrow</option>
+              <option value="week" ${item.horizon === 'week' ? 'selected' : ''}>This Week &amp; Holds</option>
+              <option value="backlog" ${item.horizon === 'backlog' ? 'selected' : ''}>Someday / Ideas</option>
             </select>
           </div>
 
           <div>
-            <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Priority Level</label>
+            <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Priority</label>
             <select id="wb-priority" class="roster-field" style="margin-top:4px;width:100%">
-              <option value="p1" ${item.priority === 'p1' ? 'selected' : ''}>P1 · Critical</option>
+              <option value="p3" ${(!item.priority || item.priority === 'p3') ? 'selected' : ''}>Normal</option>
               <option value="p2" ${item.priority === 'p2' ? 'selected' : ''}>P2 · High</option>
-              <option value="p3" ${(!item.priority || item.priority === 'p3') ? 'selected' : ''}>P3 · Normal</option>
+              <option value="p1" ${item.priority === 'p1' ? 'selected' : ''}>P1 · Critical</option>
             </select>
           </div>
         </div>
 
         <div class="roster-form-grid-2">
           <div>
-            <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Cluster</label>
+            <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Category</label>
             <select id="wb-cluster" class="roster-field" style="margin-top:4px;width:100%">
               ${CLUSTERS.map(
                 (c) => `<option value="${c.id}" ${item.category === c.id ? 'selected' : ''}>${esc(c.label)}</option>`
@@ -6569,16 +7284,9 @@
           </div>
         </div>
 
-        <div class="roster-form-grid-2">
-          <div>
-            <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Assignee (@Staff)</label>
-            <input type="text" id="wb-assignee" class="roster-field" value="${esc(item.assigneeName || '')}" placeholder="Unassigned (or type name)" style="margin-top:4px;width:100%">
-          </div>
-
-          <div>
-            <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Target / Alarm Date</label>
-            <input type="datetime-local" id="wb-due-dt" class="roster-field" value="${esc(dtLocalVal)}" style="margin-top:4px;width:100%">
-          </div>
+        <div>
+          <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Delegate To (@Staff)</label>
+          <input type="text" id="wb-assignee" class="roster-field" value="${esc(item.assigneeName || '')}" placeholder="Just me (or type staff name)" style="margin-top:4px;width:100%">
         </div>
 
         ${
@@ -6590,7 +7298,7 @@
               .map(
                 (m) => `
               <button type="button" class="mini-chip" data-wb-pick-person="${esc(m.name)}" data-wb-pick-bu="${esc(m.bu || '')}">
-                👤 ${esc(m.name)}
+                ${esc(m.name)}
               </button>
             `
               )
@@ -6601,13 +7309,13 @@
         }
 
         <div>
-          <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Instructions &amp; Context Notes</label>
-          <textarea id="wb-notes" class="roster-field" rows="2" placeholder="Add context, links, account numbers, or delegation instructions…" style="margin-top:4px;width:100%">${esc(item.notes || '')}</textarea>
+          <label style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">Notes &amp; Context</label>
+          <textarea id="wb-notes" class="roster-field" rows="2" placeholder="Add context, links, amounts, or delegation instructions…" style="margin-top:4px;width:100%">${esc(item.notes || '')}</textarea>
         </div>
 
         <div class="checklist-drawer-box">
           <div style="font-size:11px;font-weight:800;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em">
-            Deliverable Checklist (${doneSteps}/${steps.length} completed)
+            Checklist Steps (${doneSteps}/${steps.length} completed)
           </div>
           ${steps
             .map(
@@ -6621,14 +7329,14 @@
             )
             .join('')}
           <div style="display:flex;gap:6px;margin-top:4px">
-            <input type="text" class="bento-inline-input" data-step-input-for="${esc(item.id)}" placeholder="+ Add deliverable step…">
-            <button type="button" class="bento-inline-btn" data-act="add-step" data-id="${esc(item.id)}">+ Add Step</button>
+            <input type="text" class="bento-inline-input" data-step-input-for="${esc(item.id)}" placeholder="+ Type a step and press Enter…">
+            <button type="button" class="bento-inline-btn" data-act="add-step" data-id="${esc(item.id)}">+ Add</button>
           </div>
         </div>
 
         <div class="roster-form-actions">
-          <button type="submit" class="delegate-btn-assign primary" data-wb-submit="save">✓ Save Changes</button>
-          <button type="submit" class="delegate-btn-wa" data-wb-submit="whatsapp">📲 Save &amp; Send WhatsApp</button>
+          <button type="submit" class="delegate-btn-assign primary" data-wb-submit="save">✓ Save Plan</button>
+          <button type="submit" class="delegate-btn-wa" data-wb-submit="whatsapp">📲 Save &amp; WhatsApp</button>
           <button type="button" class="t-act-btn danger" data-act="delete" data-id="${esc(item.id)}">✕ Delete</button>
         </div>
       </form>
@@ -6640,6 +7348,7 @@
   function openNotificationCenterSheet(preserveViewedSnapshot = false) {
     state.openClusterSheetId = '';
     state.openSheetKind = 'notifications';
+    document.getElementById('sheet-dialog')?.classList.remove('is-composer-sheet');
     const backdrop = document.getElementById('sheet-backdrop');
     const titleWrap = document.getElementById('sheet-title-wrap');
     const body = document.getElementById('sheet-body');
@@ -6899,6 +7608,8 @@
     let selector = '';
     if (el.id) {
       selector = `#${CSS.escape(el.id)}`;
+    } else if (el.getAttribute('data-card-inline-input')) {
+      selector = `[data-card-inline-input="${CSS.escape(el.getAttribute('data-card-inline-input'))}"]`;
     } else if (el.getAttribute('data-step-input-for')) {
       selector = `[data-step-input-for="${CSS.escape(el.getAttribute('data-step-input-for'))}"]`;
     } else if (el.closest('[data-inline-cluster-form]')) {
@@ -6974,6 +7685,11 @@
     updateDockBadges();
     updatePushHudState();
 
+    const capWrap = document.getElementById('capture-bar-wrap');
+    if (capWrap) {
+      capWrap.hidden = state.activeTab !== 'planning' && state.activeTab !== 'tasks';
+    }
+
     for (const v of document.querySelectorAll('.cmd-view')) {
       const isMatch = v.getAttribute('data-view') === state.activeTab;
       v.hidden = !isMatch;
@@ -6999,14 +7715,20 @@
     restoreActiveInputState(inputSnap);
   }
 
+  let toastClearTimer = null;
   function showToast(msg) {
     const stack = document.getElementById('toast-stack');
     if (!stack) return;
+    if (toastClearTimer) clearTimeout(toastClearTimer);
+    stack.innerHTML = '';
     const el = document.createElement('div');
     el.className = 'toast-item';
     el.textContent = msg;
     stack.appendChild(el);
-    setTimeout(() => el.remove(), 2600);
+    toastClearTimer = setTimeout(() => {
+      el.remove();
+      toastClearTimer = null;
+    }, 2000);
   }
 
   /* ============================================================================
@@ -7330,9 +8052,73 @@
       openNotificationCenterSheet();
     });
 
-    // Capture Bar input, Horizon/Priority cyclers & submit
+    document.getElementById('btn-banner-dismiss-push')?.addEventListener('click', () => {
+      state.pushBannerDismissed = true;
+      try {
+        localStorage.setItem(PUSH_BANNER_DISMISSED_KEY, '1');
+      } catch {}
+      updatePushHudState();
+    });
+
+    document.getElementById('btn-open-new-plan')?.addEventListener('click', () => {
+      openNewPlanSheet();
+    });
+
+    document.getElementById('btn-draft-details')?.addEventListener('click', () => {
+      openNewPlanSheet({ fromDraft: true });
+    });
+
+    // Capture Bar input, Category/When selectors & submit
     const capInp = document.getElementById('capture-input');
     const capShell = document.getElementById('capture-input-shell');
+
+    document.getElementById('draft-cluster-select')?.addEventListener('change', (e) => {
+      state.draft.clusterOverride = e.target.value || '';
+      renderLiveAdvisorDrawer();
+      capInp?.focus({ preventScroll: true });
+    });
+
+    document.getElementById('draft-when-select')?.addEventListener('change', (e) => {
+      const val = e.target.value || 'auto';
+      if (val === 'custom') {
+        e.target.value = state.draft.whenSelect || 'auto';
+        openNewPlanSheet({ fromDraft: true, whenMode: 'date', focusDate: true });
+        return;
+      }
+      state.draft.whenSelect = val;
+      renderLiveAdvisorDrawer();
+      capInp?.focus({ preventScroll: true });
+    });
+
+    // Global Escape & keyboard shortcut ('n' opens New Plan when not typing)
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        const bd = document.getElementById('sheet-backdrop');
+        if (bd && !bd.hidden) {
+          e.preventDefault();
+          closeActiveSheet();
+          return;
+        }
+        if (state.activeInlineClusterId) {
+          e.preventDefault();
+          state.activeInlineClusterId = '';
+          renderPlanningView();
+        }
+        return;
+      }
+      if (
+        e.key === 'n' &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !isFormControlFocused() &&
+        document.getElementById('sheet-backdrop')?.hidden !== false &&
+        (state.activeTab === 'planning' || state.activeTab === 'tasks')
+      ) {
+        e.preventDefault();
+        openNewPlanSheet();
+      }
+    });
 
     // Flush any deferred background render once user finishes typing in any input
     document.addEventListener('focusout', () => {
@@ -7345,7 +8131,7 @@
     });
 
     capShell?.addEventListener('click', (e) => {
-      if (!e.target.closest('button') && !e.target.closest('input')) {
+      if (!e.target.closest('button') && !e.target.closest('input') && !e.target.closest('select')) {
         capInp?.focus();
       }
     });
@@ -7359,7 +8145,7 @@
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         state.draft.text = capInp.value;
-        addTaskFromDraft(false);
+        addTaskFromDraft(false, true);
       }
     });
 
@@ -7458,6 +8244,10 @@
         state.draft.clusterOverride = cChip.getAttribute('data-cluster-chip');
         renderLiveAdvisorDrawer();
         capInp?.focus({ preventScroll: true });
+        return;
+      }
+      if (e.target.closest('#btn-advisor-open-details')) {
+        openNewPlanSheet({ fromDraft: true });
         return;
       }
       if (e.target.closest('#btn-add-and-whatsapp')) {
@@ -7601,11 +8391,19 @@
         const val = inp?.value?.trim() || '';
         if (val) {
           if (inp) inp.value = '';
+          state.activeInlineClusterId = cId;
           await addQuickInlineTask({
             title: val,
             clusterId: cId,
-            horizon: cId === 'ideas' || cId === 'want_to_do' ? 'backlog' : 'today'
+            horizon:
+              state.selectedPlanDate && state.selectedPlanDate !== 'all'
+                ? ''
+                : cId === 'ideas' || cId === 'want_to_do'
+                  ? 'backlog'
+                  : 'today'
           });
+          const nextInp = document.querySelector(`[data-card-inline-input="${CSS.escape(cId)}"]`);
+          if (nextInp) nextInp.focus({ preventScroll: true });
         }
         return true;
       }
@@ -7711,8 +8509,11 @@
         const newCluster = document.getElementById('wb-cluster')?.value || item.category;
         const newBu = document.getElementById('wb-bu')?.value || '';
         const newAssignee = document.getElementById('wb-assignee')?.value?.trim() || '';
-        const newDueDt = document.getElementById('wb-due-dt')?.value || '';
+        const wbPlanDate = document.getElementById('wb-plan-date')?.value?.trim() || '';
+        const wbPlanTime = document.getElementById('wb-plan-time')?.value?.trim() || '';
         const newNotes = document.getElementById('wb-notes')?.value?.trim() || '';
+        const pendingStepInp = document.querySelector(`[data-step-input-for="${CSS.escape(item.id)}"]`);
+        const pendingStepTxt = pendingStepInp?.value?.trim() || '';
         const subAct = e.submitter?.getAttribute?.('data-wb-submit') || 'save';
 
         item.title = newTitle;
@@ -7722,12 +8523,39 @@
         item.buId = newBu;
         item.notes = newNotes;
 
-        if (newDueDt) {
-          const parsedMs = new Date(newDueDt).getTime();
-          if (Number.isFinite(parsedMs) && parsedMs > 0) {
-            item.dueAt = parsedMs;
-            if (item.matureAt) item.matureAt = parsedMs;
+        if (pendingStepTxt) {
+          if (!Array.isArray(item.checklist)) item.checklist = [];
+          item.checklist.push({
+            id: `st_${Date.now().toString(36)}_${item.checklist.length}`,
+            text: pendingStepTxt,
+            done: false
+          });
+        }
+
+        if (wbPlanDate && /^\d{4}-\d{2}-\d{2}$/.test(wbPlanDate)) {
+          item.planDate = wbPlanDate;
+          if (wbPlanTime && /^\d{1,2}:\d{2}$/.test(wbPlanTime)) {
+            const [yy, mm, dd] = wbPlanDate.split('-').map(Number);
+            const [hh, mi] = wbPlanTime.split(':').map(Number);
+            const parsedMs = new Date(yy, mm - 1, dd, hh, mi, 0, 0).getTime();
+            if (Number.isFinite(parsedMs) && parsedMs > 0) {
+              item.dueAt = parsedMs;
+              item.hasAlarm = true;
+              if (item.matureAt || isHoldOrTimerCategory(newCluster)) item.matureAt = parsedMs;
+            }
+          } else {
+            item.hasAlarm = false;
+            item.dueAt = 0;
+            item.matureAt = 0;
           }
+          item.horizon = horizonFromIso(wbPlanDate);
+          if (item.kind === 'parked') item.kind = 'task';
+        } else {
+          item.planDate = '';
+          item.hasAlarm = false;
+          item.dueAt = 0;
+          item.matureAt = 0;
+          if (newHorizon === 'backlog') item.kind = 'parked';
         }
 
         if (newAssignee) {
@@ -7757,13 +8585,15 @@
         renderAll();
         if (item.matureAt || item.dueAt) {
           scheduleCloudTimerPush(item, null, true).catch(() => {});
+        } else {
+          cancelCloudTimerPush(item.id).catch(() => {});
         }
         syncAll(item).catch(() => {});
 
         if (subAct === 'whatsapp' && item.isDelegated) {
           dispatchWhatsAppDelegation(item.id);
         } else {
-          showToast('✓ Saved task updates');
+          showToast('✓ Saved plan updates');
         }
         return true;
       }
@@ -7782,10 +8612,70 @@
         return;
       }
 
+      const openNewPlanDateBtn = e.target.closest('[data-open-new-plan-date]');
+      if (openNewPlanDateBtn) {
+        const dIso = openNewPlanDateBtn.getAttribute('data-open-new-plan-date') || '';
+        const baseIso = todayIso();
+        const tomIso = shiftIsoDate(baseIso, 1);
+        const wm = dIso === baseIso ? 'today' : dIso === tomIso ? 'tomorrow' : 'date';
+        openNewPlanSheet({ whenMode: wm, planDate: dIso });
+        return;
+      }
+
+      const openNewPlanClusterBtn = e.target.closest('[data-open-new-plan-cluster]');
+      if (openNewPlanClusterBtn) {
+        const cId = openNewPlanClusterBtn.getAttribute('data-open-new-plan-cluster') || 'work';
+        const qVal = document.getElementById('sheet-quick-input')?.value?.trim() || '';
+        openNewPlanSheet({ title: qVal, clusterId: cId, manualCluster: true });
+        return;
+      }
+
+      if (e.target.closest('[data-open-new-plan]')) {
+        openNewPlanSheet();
+        return;
+      }
+
+      const toggleCardAddBtn = e.target.closest('[data-toggle-card-add]');
+      if (toggleCardAddBtn) {
+        e.stopPropagation();
+        const cId = toggleCardAddBtn.getAttribute('data-toggle-card-add') || '';
+        state.activeInlineClusterId = state.activeInlineClusterId === cId ? '' : cId;
+        renderPlanningView();
+        if (state.activeInlineClusterId) {
+          setTimeout(() => {
+            const inp = document.querySelector(`[data-card-inline-input="${CSS.escape(cId)}"]`);
+            if (inp) inp.focus({ preventScroll: true });
+          }, 15);
+        }
+        return;
+      }
+
+      const closeCardAddBtn = e.target.closest('[data-close-card-add]');
+      if (closeCardAddBtn) {
+        e.stopPropagation();
+        state.activeInlineClusterId = '';
+        renderPlanningView();
+        return;
+      }
+
+      const cardDetailsBtn = e.target.closest('[data-card-open-details]');
+      if (cardDetailsBtn) {
+        e.stopPropagation();
+        const cId = cardDetailsBtn.getAttribute('data-card-open-details') || 'work';
+        const inp = document.querySelector(`[data-card-inline-input="${CSS.escape(cId)}"]`);
+        const curVal = inp?.value?.trim() || '';
+        state.activeInlineClusterId = '';
+        renderPlanningView();
+        openNewPlanSheet({ title: curVal, clusterId: cId, manualCluster: true });
+        return;
+      }
+
       const planDateCell = e.target.closest('[data-plan-date]');
       if (planDateCell) {
         const dIso = planDateCell.getAttribute('data-plan-date') || 'all';
-        state.selectedPlanDate = state.selectedPlanDate === dIso && dIso !== 'all' ? 'all' : dIso;
+        const nextDate = state.selectedPlanDate === dIso && dIso !== 'all' ? '' : dIso === 'all' ? '' : dIso;
+        state.selectedPlanDate = nextDate;
+        renderLiveAdvisorDrawer();
         renderPlanningView();
         return;
       }
@@ -7922,21 +8812,39 @@
         if (act === 'set-horizon') {
           const hVal = actBtn.getAttribute('data-horizon') || 'today';
           item.horizon = hVal;
-          if (hVal === 'today' && !item.dueAt && !item.matureAt) {
-            const eod = new Date();
-            eod.setHours(18, 0, 0, 0);
-            if (eod.getTime() <= Date.now()) eod.setTime(Date.now() + 2 * 3600000);
-            item.dueAt = eod.getTime();
+          const baseIso = todayIso();
+          if (hVal === 'today') {
+            item.planDate = baseIso;
+            if (item.kind === 'parked') item.kind = 'task';
+            if (item.hasAlarm && item.dueAt) {
+              const d = new Date(item.dueAt);
+              const [yy, mm, dd] = baseIso.split('-').map(Number);
+              item.dueAt = new Date(yy, mm - 1, dd, d.getHours(), d.getMinutes(), 0, 0).getTime();
+            }
           } else if (hVal === 'tomorrow') {
-            const tmrw = new Date(Date.now() + 86400000);
-            tmrw.setHours(10, 0, 0, 0);
-            item.dueAt = tmrw.getTime();
+            const tomIso = shiftIsoDate(baseIso, 1);
+            item.planDate = tomIso;
+            if (item.kind === 'parked') item.kind = 'task';
+            if (item.hasAlarm && item.dueAt) {
+              const d = new Date(item.dueAt);
+              const [yy, mm, dd] = tomIso.split('-').map(Number);
+              item.dueAt = new Date(yy, mm - 1, dd, d.getHours(), d.getMinutes(), 0, 0).getTime();
+            }
+          } else if (hVal === 'week') {
+            item.planDate = shiftIsoDate(baseIso, 3);
+            if (item.kind === 'parked') item.kind = 'task';
+          } else if (hVal === 'backlog') {
+            item.planDate = '';
+            item.hasAlarm = false;
+            item.dueAt = 0;
+            item.matureAt = 0;
+            item.kind = 'parked';
           }
           item.updatedAt = Date.now();
           saveLocalState();
           renderAll();
           syncAll().catch(() => {});
-          showToast(`Moved to ${hVal.toUpperCase()} horizon`);
+          showToast(`Moved to ${hVal === 'backlog' ? 'Someday' : hVal.charAt(0).toUpperCase() + hVal.slice(1)}`);
           return;
         }
         if (act === 'set-del-stage') {
@@ -8480,7 +9388,93 @@
       handleTaskInteraction(e);
     });
 
+    // Dedicated New Plan Composer interactions inside #sheet-body
+    document.getElementById('sheet-body')?.addEventListener('click', (e) => {
+      if (state.openSheetKind !== 'new_plan' || !state.newPlanForm) return;
+      if (e.target.closest('[data-np-cancel]')) {
+        closeActiveSheet();
+        return;
+      }
+      const whenBtn = e.target.closest('[data-np-when]');
+      if (whenBtn) {
+        syncNewPlanDomFieldsToState();
+        const wm = whenBtn.getAttribute('data-np-when') || 'today';
+        const baseIso = todayIso();
+        state.newPlanForm.whenMode = wm;
+        if (wm === 'today') state.newPlanForm.planDate = baseIso;
+        else if (wm === 'tomorrow') state.newPlanForm.planDate = shiftIsoDate(baseIso, 1);
+        else if (wm === 'week') state.newPlanForm.planDate = shiftIsoDate(baseIso, 3);
+        else if (wm === 'date' && !state.newPlanForm.planDate) state.newPlanForm.planDate = baseIso;
+        else if (wm === 'backlog') state.newPlanForm.planDate = '';
+        renderNewPlanSheetBody(wm === 'date' ? '#np-plan-date' : '');
+        return;
+      }
+      const holdBtn = e.target.closest('[data-np-hold]');
+      if (holdBtn) {
+        syncNewPlanDomFieldsToState();
+        state.newPlanForm.holdChoice = holdBtn.getAttribute('data-np-hold') || '1d';
+        renderNewPlanSheetBody();
+        return;
+      }
+      const catBtn = e.target.closest('[data-np-cat]');
+      if (catBtn) {
+        syncNewPlanDomFieldsToState();
+        state.newPlanForm.clusterId = catBtn.getAttribute('data-np-cat') || 'work';
+        state.newPlanForm.manualCluster = true;
+        document.querySelectorAll('[data-np-cat]').forEach((b) => {
+          b.classList.toggle('active', b.getAttribute('data-np-cat') === state.newPlanForm.clusterId);
+        });
+        const hintEl = document.getElementById('np-cat-hint');
+        if (hintEl) hintEl.textContent = 'Selected';
+        return;
+      }
+      const pickPersonBtn = e.target.closest('[data-np-pick-person]');
+      if (pickPersonBtn) {
+        syncNewPlanDomFieldsToState();
+        const pName = pickPersonBtn.getAttribute('data-np-pick-person') || '';
+        const pBu = pickPersonBtn.getAttribute('data-np-pick-bu') || '';
+        state.newPlanForm.assigneeName = state.newPlanForm.assigneeName === pName ? '' : pName;
+        if (state.newPlanForm.assigneeName && pBu) state.newPlanForm.buId = pBu;
+        if (state.newPlanForm.assigneeName && !state.newPlanForm.manualCluster) {
+          state.newPlanForm.clusterId = 'people';
+        }
+        renderNewPlanSheetBody();
+        return;
+      }
+      if (e.target.closest('#btn-np-add-step')) {
+        syncNewPlanDomFieldsToState();
+        const stepTxt = String(state.newPlanForm.pendingStep || '').trim();
+        if (stepTxt) {
+          state.newPlanForm.checklist.push({
+            id: `st_${Date.now().toString(36)}_${state.newPlanForm.checklist.length}`,
+            text: stepTxt,
+            done: false
+          });
+          state.newPlanForm.pendingStep = '';
+          renderNewPlanSheetBody('#np-step-input');
+        } else {
+          document.getElementById('np-step-input')?.focus();
+        }
+        return;
+      }
+      const delStepBtn = e.target.closest('[data-np-del-step]');
+      if (delStepBtn) {
+        syncNewPlanDomFieldsToState();
+        const idx = Number(delStepBtn.getAttribute('data-np-del-step'));
+        if (Number.isInteger(idx) && idx >= 0) {
+          state.newPlanForm.checklist.splice(idx, 1);
+          renderNewPlanSheetBody('#np-step-input');
+        }
+      }
+    });
+
     document.getElementById('sheet-body')?.addEventListener('submit', async (e) => {
+      if (e.target.id === 'new-plan-form') {
+        e.preventDefault();
+        const subMode = e.submitter?.getAttribute?.('data-np-submit') || 'save';
+        await submitNewPlanForm(subMode);
+        return;
+      }
       if (await handleStageFormSubmit(e)) return;
       if (e.target.id === 'roster-add-form') {
         e.preventDefault();
@@ -8555,6 +9549,51 @@
     document.getElementById('sheet-body')?.addEventListener('input', (e) => {
       if (e.target.id === 'delegate-sheet-task-input') {
         state.draft.text = e.target.value;
+        return;
+      }
+      if (state.openSheetKind === 'new_plan' && state.newPlanForm) {
+        if (e.target.id === 'np-title') {
+          state.newPlanForm.title = e.target.value;
+          if (!state.newPlanForm.manualCluster) {
+            const autoC = detectCluster(state.newPlanForm.title, '').id;
+            state.newPlanForm.clusterId = autoC;
+            document.querySelectorAll('[data-np-cat]').forEach((b) => {
+              b.classList.toggle('active', b.getAttribute('data-np-cat') === autoC);
+            });
+          }
+          const ctx = extractSmartContext(state.newPlanForm.title);
+          if (ctx.assigneeName) {
+            const asgEl = document.getElementById('np-assignee');
+            if (asgEl && !asgEl.value) {
+              asgEl.value = ctx.assigneeName;
+              state.newPlanForm.assigneeName = ctx.assigneeName;
+              const waBtn = document.getElementById('btn-np-submit-wa');
+              if (waBtn) waBtn.style.display = '';
+            }
+          }
+          return;
+        }
+        if (e.target.id === 'np-assignee') {
+          state.newPlanForm.assigneeName = e.target.value;
+          const waBtn = document.getElementById('btn-np-submit-wa');
+          if (waBtn) waBtn.style.display = e.target.value.trim() ? '' : 'none';
+          return;
+        }
+        if (e.target.id === 'np-plan-date') {
+          const val = e.target.value;
+          state.newPlanForm.planDate = val;
+          const baseIso = todayIso();
+          const tomIso = shiftIsoDate(baseIso, 1);
+          const nextMode = val === baseIso ? 'today' : val === tomIso ? 'tomorrow' : 'date';
+          state.newPlanForm.whenMode = nextMode;
+          document.querySelectorAll('[data-np-when]').forEach((b) => {
+            b.classList.toggle('active', b.getAttribute('data-np-when') === nextMode);
+          });
+          const sumEl = document.getElementById('np-when-summary');
+          if (sumEl && val) sumEl.textContent = formatIsoFriendly(val, true);
+          return;
+        }
+        syncNewPlanDomFieldsToState();
       }
     });
 
@@ -8562,6 +9601,13 @@
       if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
       const target = e.target;
       if (!target || (target.tagName || '').toUpperCase() !== 'INPUT') return;
+
+      if (target.id === 'np-step-input') {
+        e.preventDefault();
+        e.stopPropagation();
+        document.getElementById('btn-np-add-step')?.click();
+        return;
+      }
 
       if (target.id === 'sheet-quick-input') {
         e.preventDefault();
@@ -8696,7 +9742,7 @@
         }
       });
       navigator.serviceWorker
-        .register('./sw.js?v=21', { updateViaCache: 'none' })
+        .register('./sw.js?v=26', { updateViaCache: 'none' })
         .then(async (reg) => {
           reg.update().catch(() => {});
           if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
@@ -8813,7 +9859,9 @@
         .query({ name: 'geolocation' })
         .then((res) => {
           if (res.state === 'granted' && state.prayerConfig.autoGps !== false) {
-            detectPrayerLocationGps(true).catch(() => {});
+            try {
+              detectPrayerLocationGps(true);
+            } catch {}
           }
         })
         .catch(() => {});
