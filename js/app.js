@@ -257,9 +257,185 @@
   ]);
 
   const cfg = window.THEO_CLOUD_CFG || {};
-  const CLOUD_URL = cfg.u ? atob(cfg.u) : '';
-  const CLOUD_KEY = cfg.k ? atob(cfg.k) : '';
   const BRIDGE_PORT = cfg.port || 4318;
+
+  /* ============================================================================
+     EDGE STORE & DEVICE PAIRING (v31)
+     The store lives on the THEO Edge relay Worker. No key ships in this public page: each owner device is paired
+     once (6-digit code from THEO on the PC, or automatically when THEO Remote is already paired in this browser)
+     and keeps a store key derived from the edge access key. Staff task links never need a key.
+     ============================================================================ */
+  const PAIR_STORE_KEY = 'theo_cmd_store_key_v1';
+  const THEO_REMOTE_PREFS_KEY = 'theo_remote_prefs_v1';
+
+  function sha256HexSync(text) {
+    const K = [
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+      0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+      0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+      0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+      0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+      0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+    ];
+    const H = [
+      0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+    ];
+    const rotr = (x, n) => (x >>> n) | (x << (32 - n));
+    const bytes = new TextEncoder().encode(String(text));
+    const len = bytes.length;
+    const padded = new Uint8Array(((len + 9 + 63) >> 6) << 6);
+    padded.set(bytes);
+    padded[len] = 0x80;
+    const view = new DataView(padded.buffer);
+    view.setUint32(padded.length - 8, Math.floor((len * 8) / 0x100000000), false);
+    view.setUint32(padded.length - 4, (len * 8) >>> 0, false);
+    const w = new Uint32Array(64);
+    for (let off = 0; off < padded.length; off += 64) {
+      for (let i = 0; i < 16; i++) w[i] = view.getUint32(off + i * 4, false);
+      for (let i = 16; i < 64; i++) {
+        const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+        const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+        w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+      }
+      let [a, b, c, d, e, f, g, h] = H;
+      for (let i = 0; i < 64; i++) {
+        const t1 = (h + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + K[i] + w[i]) >>> 0;
+        const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0;
+        h = g;
+        g = f;
+        f = e;
+        e = (d + t1) >>> 0;
+        d = c;
+        c = b;
+        b = a;
+        a = (t1 + t2) >>> 0;
+      }
+      H[0] = (H[0] + a) >>> 0;
+      H[1] = (H[1] + b) >>> 0;
+      H[2] = (H[2] + c) >>> 0;
+      H[3] = (H[3] + d) >>> 0;
+      H[4] = (H[4] + e) >>> 0;
+      H[5] = (H[5] + f) >>> 0;
+      H[6] = (H[6] + g) >>> 0;
+      H[7] = (H[7] + h) >>> 0;
+    }
+    return H.map((x) => x.toString(16).padStart(8, '0')).join('');
+  }
+
+  function normalizeEdgeHttpBase(rawUrl) {
+    const base = String(rawUrl || '')
+      .trim()
+      .replace(/^wss:\/\//i, 'https://')
+      .replace(/^ws:\/\//i, 'http://')
+      .replace(/[?#].*$/, '')
+      .replace(/\/+$/, '')
+      .replace(/\/ws$/i, '')
+      .replace(/\/+$/, '');
+    return /^https:\/\/[^\s]+$/i.test(base) ? base : '';
+  }
+
+  const EDGE_HTTP_BASE =
+    normalizeEdgeHttpBase(cfg.edgeRelayUrl) || 'https://theo-edge-relay.husseinbdeir.workers.dev';
+  const CLOUD_URL = `${EDGE_HTTP_BASE}/store`;
+
+  function isStoreKeyShape(v) {
+    return typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
+  }
+
+  function deriveStoreKeyFromEdgeKey(edgeKey) {
+    const clean = String(edgeKey || '').trim();
+    return clean.length >= 32 ? sha256HexSync(`theo-edge-v1:${clean}`) : '';
+  }
+
+  function loadPairedStoreKey() {
+    try {
+      const saved = localStorage.getItem(PAIR_STORE_KEY) || '';
+      if (isStoreKeyShape(saved)) return saved;
+    } catch {}
+    // Same browser profile as a paired THEO Remote (desktop, Android): reuse its edge pairing, no code needed.
+    try {
+      const theoPrefs = JSON.parse(localStorage.getItem(THEO_REMOTE_PREFS_KEY) || 'null');
+      const derived = deriveStoreKeyFromEdgeKey(theoPrefs?.edgeAccessKey);
+      if (isStoreKeyShape(derived)) {
+        localStorage.setItem(PAIR_STORE_KEY, derived);
+        return derived;
+      }
+    } catch {}
+    return '';
+  }
+
+  let CLOUD_KEY = loadPairedStoreKey();
+
+  function decodePairBundleEdgeKey(bundle) {
+    try {
+      const b64 = String(bundle || '').replace(/-/g, '+').replace(/_/g, '/');
+      const pad = b64.length % 4 === 0 ? '' : '===='.slice(b64.length % 4);
+      const obj = JSON.parse(atob(b64 + pad));
+      return String(obj?.e || obj?.edgeAccessKey || '').trim();
+    } catch {
+      return '';
+    }
+  }
+
+  let pairClaimInFlight = false;
+  async function claimPlannerPairCode(rawCode) {
+    if (pairClaimInFlight) return false;
+    const digits = String(rawCode || '').replace(/\D+/g, '');
+    if (digits.length !== 6) {
+      showToast('Open THEO on your PC, choose Pair Device, then enter its 6-digit code here');
+      return false;
+    }
+    if (isHeadlessQuarantine() && !window.__PLANNER_ALLOW_PAIR_MOCK_FETCH) return false;
+    pairClaimInFlight = true;
+    let timer = null;
+    try {
+      const ctrl = new AbortController();
+      timer = setTimeout(() => ctrl.abort(), 15000);
+      const res = await fetch(`${EDGE_HTTP_BASE}/pair/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: digits }),
+        signal: ctrl.signal
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.ok || !data?.bundle) {
+        showToast(data?.error || 'Invalid or expired 6-digit code');
+        return false;
+      }
+      const derived = deriveStoreKeyFromEdgeKey(decodePairBundleEdgeKey(data.bundle));
+      if (!isStoreKeyShape(derived)) {
+        showToast('That code carried no edge key. Generate a new code in THEO.');
+        return false;
+      }
+      // Keep the key only once the store has accepted it.
+      const probe = await fetch(CLOUD_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+        body: JSON.stringify({ key: derived, op: 'patch', ackOnly: true, patch: {} }),
+        signal: ctrl.signal
+      });
+      if (!probe.ok) {
+        showToast('The store did not accept this pairing. Generate a new code in THEO.');
+        return false;
+      }
+      localStorage.setItem(PAIR_STORE_KEY, derived);
+      CLOUD_KEY = derived;
+      return true;
+    } catch {
+      showToast('Could not reach the THEO relay. Check your connection.');
+      return false;
+    } finally {
+      if (timer) clearTimeout(timer);
+      pairClaimInFlight = false;
+    }
+  }
+
+  function updatePairBannerState() {
+    const banner = document.getElementById('planner-pair-banner');
+    if (banner) banner.hidden = Boolean(CLOUD_KEY);
+  }
 
   function todayIso() {
     const d = new Date();
@@ -2577,7 +2753,7 @@
       const [yy, mm, dd] = iso.split('-').map(Number);
       const pSched = computeShiaPrayerTimesForDate(iso);
 
-      // 1. Morning Executive & Prayer Brief (UTC slot matching Power Automate utcNow('yyyy-MM-ddTHH'))
+      // 1. Morning Executive & Prayer Brief (UTC slot key yyyy-MM-ddTHH, dispatched hourly by the Edge relay store)
       const mLocal = new Date(yy, mm - 1, dd, mHour, 0, 0);
       if (mLocal.getTime() > Date.now() - 3600000) {
         const mUtcKey = mLocal.toISOString().slice(0, 13);
@@ -2993,8 +3169,8 @@
             const isPrayer = Boolean(payload.openPrayer || payload.tab === 'prayers');
             reg.showNotification(payload.title || 'Planner', {
               body: payload.body || '',
-              icon: './icon-192.png?v=30',
-              badge: './icon-192.png?v=30',
+              icon: './icon-192.png?v=31',
+              badge: './icon-192.png?v=31',
               tag: payload.tag || 'theo-cmd-notif',
               renotify: false,
               requireInteraction: Boolean(payload.requireInteraction),
@@ -4138,7 +4314,7 @@
       }
     }
 
-    // 2. Sync with Dataverse Cloud Relay (including delegated_tasks, push_registry & prayer timers!)
+    // 2. Sync with the Edge relay store (including delegated_tasks, push_registry & prayer timers!)
     if (!CLOUD_URL || !CLOUD_KEY) {
       if (syncBtn) syncBtn.hidden = true;
       return;
@@ -8318,7 +8494,9 @@
                         method: 'POST',
                         headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
                         body: JSON.stringify({
-                          key: CLOUD_KEY,
+                          // Staff devices hold no store key: the task token authorises a push to this task's owner only.
+                          taskId,
+                          token,
                           op: 'push',
                           endpoint: tgt.endpoint,
                           vapid: freshVapid,
@@ -8400,6 +8578,21 @@
         await subscribeCurrentBrowserPush();
       }
       openNotificationCenterSheet();
+    });
+
+    document.getElementById('planner-pair-form')?.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const input = document.getElementById('planner-pair-code');
+      const btn = document.getElementById('btn-pair-device');
+      if (btn) btn.disabled = true;
+      const paired = await claimPlannerPairCode(input ? input.value : '');
+      if (btn) btn.disabled = false;
+      if (!paired) return;
+      if (input) input.value = '';
+      updatePairBannerState();
+      showToast('✓ Device paired');
+      // A clean start arms sync, prayer and task timers with the new key.
+      setTimeout(() => location.reload(), 700);
     });
 
     document.getElementById('btn-banner-enable-push')?.addEventListener('click', async () => {
@@ -10218,7 +10411,7 @@
         }
       });
       navigator.serviceWorker
-        .register('./sw.js?v=30', { updateViaCache: 'none' })
+        .register('./sw.js?v=31', { updateViaCache: 'none' })
         .then(async (reg) => {
           reg.update().catch(() => {});
           if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
@@ -10327,6 +10520,7 @@
       syncAll().catch(() => {});
     });
     updatePushHudState();
+    updatePairBannerState();
     bindOwnerEvents();
     renderAll();
 

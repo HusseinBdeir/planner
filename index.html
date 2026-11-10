@@ -9,13 +9,13 @@
   <meta name="apple-mobile-web-app-title" content="Planner">
   <meta name="description" content="Planner — Executive Planning, Horizon Agenda, BHFIRMS Delegation &amp; Accountability, Daily 100% Score &amp; Shia Prayer Times.">
   <title>Planner — Executive Planning, Delegation, Tasks, Score &amp; Prayer Times</title>
-  <link rel="manifest" href="manifest.json?v=30">
-  <link rel="icon" type="image/svg+xml" href="icon.svg?v=30">
-  <link rel="apple-touch-icon" href="icon-180.png?v=30">
+  <link rel="manifest" href="manifest.json?v=31">
+  <link rel="icon" type="image/svg+xml" href="icon.svg?v=31">
+  <link rel="apple-touch-icon" href="icon-180.png?v=31">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/command.css?v=30">
+  <link rel="stylesheet" href="css/command.css?v=31">
   <script id="pre">
     (() => {
       try {
@@ -40,7 +40,7 @@
     <!-- Architectural Rev 10 Top HUD Ribbon -->
     <header class="hud-ribbon" id="hud-ribbon">
       <div class="hud-left">
-        <img src="icon.svg?v=30" alt="Planner" class="hud-logo">
+        <img src="icon.svg?v=31" alt="Planner" class="hud-logo">
         <div class="hud-brand-copy">
           <div class="hud-brand-row">
             <span class="hud-brand-name">PLANNER</span>
@@ -168,6 +168,18 @@
       <!-- Subtle 1-Line Smart Context Strip (Only shown when @Assignee or $Hold detected) -->
       <div class="live-advisor-drawer" id="live-advisor-drawer" hidden></div>
 
+      <!-- Device Pairing Banner (shown only while this device holds no store key) -->
+      <div class="planner-push-banner planner-pair-banner" id="planner-pair-banner" hidden>
+        <div class="planner-push-banner-copy">
+          <svg class="push-banner-svg" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><rect x="5.2" y="2.2" width="7.6" height="13.6" rx="1.6"/><path d="M8 13.2h2"/></svg>
+          <span><strong>Pair this device</strong> to sync plans and alerts</span>
+        </div>
+        <form class="planner-push-banner-actions" id="planner-pair-form" autocomplete="off">
+          <input type="text" inputmode="numeric" maxlength="7" class="planner-pair-input tabular" id="planner-pair-code" placeholder="6-digit code" aria-label="6-digit pairing code from THEO on your PC" autocomplete="one-time-code">
+          <button type="submit" class="planner-push-activate-btn" id="btn-pair-device">Pair</button>
+        </form>
+      </div>
+
       <!-- Compact Dismissible Device Push Banner -->
       <div class="planner-push-banner" id="planner-push-banner" hidden>
         <div class="planner-push-banner-copy">
@@ -247,7 +259,7 @@
   <!-- Toast Stack -->
   <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
 
-  <script src="js/endpoints.js?v=30"></script>
-  <script src="js/app.js?v=30"></script>
+  <script src="js/endpoints.js?v=31"></script>
+  <script src="js/app.js?v=31"></script>
 </body>
 </html>

@@ -3327,6 +3327,50 @@ html[data-theme="dark"] .h-seg-btn.active-amber {
   height: 13px;
 }
 
+/* Device pairing banner (v31): same shell as the push banner, with a 6-digit code field */
+.planner-pair-banner + .planner-push-banner {
+  margin-top: 6px;
+}
+
+.planner-pair-input {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 104px;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
+.planner-pair-input::placeholder {
+  color: var(--text-muted, var(--text-secondary));
+  letter-spacing: 0;
+}
+
+.planner-pair-input:focus-visible {
+  outline: 2px solid var(--brass-bright);
+  outline-offset: 1px;
+}
+
+#btn-pair-device:disabled {
+  opacity: 0.55;
+}
+
+@media (max-width: 768px) {
+  /* 16px stops iOS Safari from zooming the viewport when the field takes focus */
+  .planner-pair-input {
+    font-size: 16px !important;
+    width: 118px;
+    padding: 4px 6px;
+  }
+}
+
 .notif-channel-card {
   padding: 10px 12px;
   border-radius: 10px;
